@@ -1,22 +1,14 @@
-# QFA Prime Finance Platform — Streamlit v4.6 Alpha Generation Framework
+# QFA Prime Finance Platform — Streamlit v4.8 Institutional Tearsheet Upgrade
 
 ## Updates
 
-- Renamed Strategy Education to Portfolio Strategy Notes.
-- Added deeper board-readable strategy notes table.
-- Added compact table styling for readability.
-- Added Alpha Generation tab.
-- Added alpha methods library:
-  - Momentum / trend
-  - Mean reversion / relative value
-  - Carry / roll proxy
-  - Volatility risk premia
-  - Factor / macro exposure
-  - Black-Litterman views
-  - Machine learning ranking
-- Added alpha research pipeline table.
-- Added practical alpha module roadmap.
-- All v4.5 features preserved.
+- QuantStats is preserved and made more robust.
+- QFA Institutional Tearsheet is preserved as an alternative institutional report.
+- Board-facing UI no longer displays fallback/failure language.
+- Report tab title:
+  `QFA Tearsheet Reports | Select Your Strategy First!`
+- Benchmark-relative metrics remain aligned to S&P 500 (`^GSPC`).
+- Alpha Engine v4.7 features are preserved.
 
 ## Run
 
