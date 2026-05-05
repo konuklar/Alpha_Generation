@@ -1,22 +1,16 @@
-# QFA Prime Finance Platform — Streamlit v4.10 Tearsheet Metrics Render Fix
+# QFA Prime Finance Platform — Streamlit v4.11 Verified Tearsheet Metrics
 
-## Critical Fix
+## Critical change
 
-v4.10 guarantees that the downloaded QFA Institutional Tearsheet HTML includes the full QFA QuantStats-style metrics table.
+The QFA Institutional Tearsheet download is now unmistakable:
 
-Included in HTML:
+- QFA Institutional Tearsheet button appears first.
+- Download filename includes `v411`.
+- HTML report contains visible marker: `v4.11 VERIFIED`.
+- The report contains the full section:
+  `QFA QuantStats-Style Metrics — v4.11 Verified`
 
-- Sharpe, Sortino, Calmar, Omega
-- CAGR, cumulative return, annual volatility
-- Max drawdown, longest DD days
-- Beta, R², Treynor, Information Ratio vs ^GSPC
-- VaR 95/99, CVaR 95/99
-- Win rate, payoff ratio, profit factor
-- Gain/Pain, tail ratio, common sense ratio
-- Kelly Criterion
-- Ulcer Index, Ulcer Performance Index
-
-Benchmark-relative metrics use S&P 500 (`^GSPC`).
+If an old HTML appears, the deployed app is not v4.11 or the browser is opening an old downloaded file.
 
 ## Run
 
