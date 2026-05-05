@@ -116,7 +116,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "Streamlit Interactive v4.6 Alpha Generation Framework"
+VERSION = "Streamlit Interactive v4.7 Full Alpha Engine"
 TRADING_DAYS = 252
 DEFAULT_RF = 0.045
 MIN_START_DATE = dt.date(2018, 1, 1)
@@ -1039,6 +1039,233 @@ def build_strategy_set(
     return strategy_returns, strategy_weights, wdf, opt_perf
 
 
+
+# ============================================================
+# ALPHA ENGINE — LIVE SIGNALS, IC, ALPHA WEIGHTS
+# ============================================================
+
+def zscore_frame(df: pd.DataFrame, window: int) -> pd.DataFrame:
+    mu = df.rolling(window).mean()
+    sig = df.rolling(window).std().replace(0, np.nan)
+    return (df - mu) / sig
+
+
+def cross_sectional_rank_score(df: pd.DataFrame, higher_is_better: bool = True) -> pd.DataFrame:
+    """
+    Converts each date's cross-section into [-1, +1] rank score.
+    """
+    ranks = df.rank(axis=1, pct=True, ascending=not higher_is_better)
+    return (ranks - 0.5) * 2.0
+
+
+def build_alpha_signals(
+    returns: pd.DataFrame,
+    prices: pd.DataFrame,
+    momentum_short: int = 63,
+    momentum_long: int = 126,
+    meanrev_window: int = 63,
+    vol_window: int = 63,
+) -> Dict[str, pd.DataFrame]:
+    """
+    Produces transparent alpha signal families:
+    - Momentum: cross-sectional rank of trailing returns
+    - Mean Reversion: negative z-score of price deviation
+    - Volatility Quality: lower realized vol receives higher score
+    - Composite: average of available normalized scores
+    """
+    px = prices.reindex(returns.index).dropna(how="any")
+    r = returns.reindex(px.index).dropna(how="any")
+
+    mom_short_raw = px.pct_change(momentum_short)
+    mom_long_raw = px.pct_change(momentum_long)
+    momentum_score = 0.5 * cross_sectional_rank_score(mom_short_raw, True) + 0.5 * cross_sectional_rank_score(mom_long_raw, True)
+
+    price_z = zscore_frame(np.log(px), meanrev_window)
+    meanrev_score = cross_sectional_rank_score(-price_z, True)
+
+    realized_vol = r.rolling(vol_window).std() * np.sqrt(TRADING_DAYS)
+    vol_quality_score = cross_sectional_rank_score(-realized_vol, True)
+
+    composite = pd.concat(
+        {
+            "Momentum": momentum_score,
+            "Mean Reversion": meanrev_score,
+            "Volatility Quality": vol_quality_score,
+        },
+        axis=1,
+    )
+
+    composite_score = (
+        momentum_score.reindex(r.index).fillna(0.0)
+        + meanrev_score.reindex(r.index).fillna(0.0)
+        + vol_quality_score.reindex(r.index).fillna(0.0)
+    ) / 3.0
+
+    return {
+        "Momentum": momentum_score.dropna(how="all"),
+        "Mean Reversion": meanrev_score.dropna(how="all"),
+        "Volatility Quality": vol_quality_score.dropna(how="all"),
+        "Composite Alpha": composite_score.dropna(how="all"),
+    }
+
+
+def forward_returns(returns: pd.DataFrame, horizon: int) -> pd.DataFrame:
+    """
+    Approximate forward compounded returns from daily returns.
+    """
+    return (1 + returns).rolling(horizon).apply(lambda x: np.prod(x) - 1, raw=False).shift(-horizon)
+
+
+def information_coefficient(signal: pd.DataFrame, returns: pd.DataFrame, horizon: int = 21, method: str = "spearman") -> pd.Series:
+    """
+    Cross-sectional IC: date-by-date correlation between today's signal and future returns.
+    """
+    fwd = forward_returns(returns.reindex(signal.index), horizon)
+    common_idx = signal.index.intersection(fwd.index)
+    out = {}
+    for dt_idx in common_idx:
+        s = signal.loc[dt_idx]
+        f = fwd.loc[dt_idx]
+        df = pd.concat([s.rename("signal"), f.rename("future")], axis=1).dropna()
+        if len(df) >= 3:
+            out[dt_idx] = df["signal"].corr(df["future"], method=method)
+    return pd.Series(out, name=f"{horizon}D {method.title()} IC").dropna()
+
+
+def ic_summary_table(signals: Dict[str, pd.DataFrame], returns: pd.DataFrame, horizon: int) -> pd.DataFrame:
+    rows = []
+    for name, sig in signals.items():
+        ic = information_coefficient(sig, returns, horizon=horizon, method="spearman")
+        if len(ic) == 0:
+            rows.append({"Signal": name, "Mean IC": np.nan, "IC Vol": np.nan, "ICIR": np.nan, "Hit Ratio": np.nan, "Observations": 0})
+        else:
+            rows.append({
+                "Signal": name,
+                "Mean IC": ic.mean(),
+                "IC Vol": ic.std(),
+                "ICIR": ic.mean() / ic.std() * np.sqrt(12) if ic.std() and not pd.isna(ic.std()) else np.nan,
+                "Hit Ratio": (ic > 0).mean(),
+                "Observations": len(ic),
+            })
+    return pd.DataFrame(rows)
+
+
+def alpha_weights_from_signal(
+    signal: pd.DataFrame,
+    max_weight: float = 0.45,
+    long_only: bool = True,
+) -> pd.DataFrame:
+    """
+    Converts alpha scores into portfolio weights.
+    Long-only mode clips negative scores to zero.
+    """
+    sig = signal.copy().replace([np.inf, -np.inf], np.nan).fillna(0.0)
+
+    if long_only:
+        raw = sig.clip(lower=0.0)
+        # if all scores are <= 0 on a date, fall back to equal weight
+        weights = raw.div(raw.sum(axis=1).replace(0, np.nan), axis=0)
+        eq = pd.DataFrame(1.0 / sig.shape[1], index=sig.index, columns=sig.columns)
+        weights = weights.fillna(eq)
+    else:
+        demeaned = sig.sub(sig.mean(axis=1), axis=0)
+        denom = demeaned.abs().sum(axis=1).replace(0, np.nan)
+        weights = demeaned.div(denom, axis=0).fillna(0.0)
+
+    if long_only:
+        weights = weights.clip(upper=max_weight)
+        weights = weights.div(weights.sum(axis=1).replace(0, np.nan), axis=0).fillna(1.0 / sig.shape[1])
+    return weights
+
+
+def portfolio_returns_from_dynamic_weights(returns: pd.DataFrame, weights: pd.DataFrame, rebalance_lag: int = 1) -> pd.Series:
+    """
+    Uses signal weights with a lag to avoid look-ahead bias.
+    """
+    w = weights.shift(rebalance_lag).reindex(returns.index).ffill().dropna(how="all")
+    r = returns.reindex(w.index).dropna(how="any")
+    w = w.reindex(r.index).fillna(0.0)
+    out = (w * r).sum(axis=1)
+    out.name = "Alpha Composite Portfolio"
+    return out
+
+
+def alpha_turnover(weights: pd.DataFrame) -> pd.Series:
+    return weights.diff().abs().sum(axis=1).fillna(0.0)
+
+
+def alpha_signal_snapshot(signal: pd.DataFrame, weights: pd.DataFrame) -> pd.DataFrame:
+    if signal.empty:
+        return pd.DataFrame()
+    last_date = signal.dropna(how="all").index.max()
+    s = signal.loc[last_date].sort_values(ascending=False)
+    w = weights.reindex(signal.index).ffill().loc[last_date]
+    rows = []
+    for ticker, score in s.items():
+        rows.append({
+            "Ticker": ticker,
+            "Display Name": COMMODITY_UNIVERSE.get(ticker, {}).get("display", ticker),
+            "Latest Alpha Score": score,
+            "Latest Alpha Weight": w.get(ticker, np.nan),
+            "Signal Rank": int(s.rank(ascending=False).loc[ticker]),
+            "As Of": last_date.strftime("%Y-%m-%d"),
+        })
+    return pd.DataFrame(rows)
+
+
+def alpha_governance_table(alpha_returns: pd.Series, benchmark: pd.Series, weights: pd.DataFrame, ic_table: pd.DataFrame, rf: float) -> pd.DataFrame:
+    p, b = align_two(alpha_returns, benchmark, "Alpha", "Benchmark")
+    avg_turnover = alpha_turnover(weights).reindex(p.index).mean()
+    mean_ic = ic_table.loc[ic_table["Signal"] == "Composite Alpha", "Mean IC"].iloc[0] if "Composite Alpha" in list(ic_table["Signal"]) else np.nan
+    icir = ic_table.loc[ic_table["Signal"] == "Composite Alpha", "ICIR"].iloc[0] if "Composite Alpha" in list(ic_table["Signal"]) else np.nan
+
+    rows = [
+        {"Check": "Positive Mean IC", "Value": mean_ic, "Status": "PASS" if pd.notna(mean_ic) and mean_ic > 0 else "WATCH"},
+        {"Check": "ICIR", "Value": icir, "Status": "PASS" if pd.notna(icir) and icir > 0.25 else "WATCH"},
+        {"Check": "Sharpe", "Value": sharpe_ratio(p, rf), "Status": "PASS" if sharpe_ratio(p, rf) > 0.5 else "WATCH"},
+        {"Check": "Max Drawdown", "Value": max_drawdown(p), "Status": "PASS" if max_drawdown(p) > -0.35 else "WATCH"},
+        {"Check": "Tracking Error", "Value": tracking_error(p, b), "Status": "PASS" if tracking_error(p, b) < 0.25 else "WATCH"},
+        {"Check": "Average Daily Turnover", "Value": avg_turnover, "Status": "PASS" if avg_turnover < 0.50 else "WATCH"},
+    ]
+    return pd.DataFrame(rows)
+
+
+def build_alpha_engine(
+    prices: pd.DataFrame,
+    returns: pd.DataFrame,
+    rf: float,
+    max_weight: float,
+    momentum_short: int,
+    momentum_long: int,
+    meanrev_window: int,
+    vol_window: int,
+    ic_horizon: int,
+) -> Dict[str, Any]:
+    signals = build_alpha_signals(
+        returns=returns,
+        prices=prices,
+        momentum_short=momentum_short,
+        momentum_long=momentum_long,
+        meanrev_window=meanrev_window,
+        vol_window=vol_window,
+    )
+    composite = signals["Composite Alpha"].reindex(returns.index).dropna(how="all")
+    weights = alpha_weights_from_signal(composite, max_weight=max_weight, long_only=True)
+    alpha_ret = portfolio_returns_from_dynamic_weights(returns, weights, rebalance_lag=1)
+    ic_table = ic_summary_table(signals, returns, horizon=ic_horizon)
+    snapshot = alpha_signal_snapshot(composite, weights)
+
+    return {
+        "signals": signals,
+        "composite": composite,
+        "weights": weights,
+        "returns": alpha_ret,
+        "ic_table": ic_table,
+        "snapshot": snapshot,
+        "turnover": alpha_turnover(weights),
+    }
+
+
 # ============================================================
 # GARCH
 # ============================================================
@@ -1410,6 +1637,80 @@ def fig_underwater_recovery(strategy_returns: Dict[str, pd.Series], selected: Li
     return layout(fig, "Underwater Chart — Strategy Recovery Profile", 720)
 
 
+
+def fig_alpha_scores(signal: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    for i, col in enumerate(signal.columns):
+        fig.add_trace(go.Scatter(
+            x=signal.index,
+            y=signal[col],
+            mode="lines",
+            name=COMMODITY_UNIVERSE.get(col, {}).get("display", col),
+            line=dict(color=QFA_SEQUENCE[i % len(QFA_SEQUENCE)], width=1.9),
+        ))
+    fig.update_yaxes(title="Alpha Score")
+    return layout(fig, "Composite Alpha Scores by Instrument", 720)
+
+
+def fig_alpha_weights(weights: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    for i, col in enumerate(weights.columns):
+        fig.add_trace(go.Scatter(
+            x=weights.index,
+            y=weights[col],
+            mode="lines",
+            stackgroup="one",
+            name=COMMODITY_UNIVERSE.get(col, {}).get("display", col),
+            line=dict(color=QFA_SEQUENCE[i % len(QFA_SEQUENCE)], width=1.0),
+        ))
+    fig.update_yaxes(title="Dynamic Weight", tickformat=".0%")
+    return layout(fig, "Alpha Engine Dynamic Weights", 720)
+
+
+def fig_ic_series(signals: Dict[str, pd.DataFrame], returns: pd.DataFrame, horizon: int) -> go.Figure:
+    fig = go.Figure()
+    for i, (name, sig) in enumerate(signals.items()):
+        ic = information_coefficient(sig, returns, horizon=horizon, method="spearman")
+        fig.add_trace(go.Scatter(x=ic.index, y=ic.values, mode="lines", name=name, line=dict(color=QFA_SEQUENCE[i % len(QFA_SEQUENCE)], width=1.9)))
+    fig.add_hline(y=0, line_dash="dash", annotation_text="IC = 0")
+    fig.update_yaxes(title="Spearman Rank IC")
+    return layout(fig, f"{horizon}-Day Forward Information Coefficient", 720)
+
+
+def fig_alpha_cumulative(alpha_ret: pd.Series, benchmark: pd.Series, equal_weight_ret: pd.Series) -> go.Figure:
+    fig = go.Figure()
+    a = (1 + alpha_ret.dropna()).cumprod()
+    e = (1 + equal_weight_ret.reindex(a.index).dropna()).cumprod()
+    b = (1 + benchmark.reindex(a.index).dropna()).cumprod()
+
+    fig.add_trace(go.Scatter(x=a.index, y=a.values, mode="lines", name="Alpha Composite", line=dict(color=QFA_COLORS["navy"], width=3.0)))
+    fig.add_trace(go.Scatter(x=e.index, y=e.values, mode="lines", name="Equal Weight", line=dict(color=QFA_COLORS["muted_gold"], width=2.4)))
+    fig.add_trace(go.Scatter(x=b.index, y=b.values, mode="lines", name=BENCHMARK_NAME, line=dict(color=QFA_COLORS["gray"], width=2.2, dash="dash")))
+    fig.update_yaxes(title="Growth of $1")
+    return layout(fig, "Alpha Portfolio vs Equal Weight vs Benchmark", 740)
+
+
+def fig_alpha_drawdown(alpha_ret: pd.Series, equal_weight_ret: pd.Series) -> go.Figure:
+    def dd(r):
+        eq = (1 + r.dropna()).cumprod()
+        return eq / eq.cummax() - 1
+    a = dd(alpha_ret)
+    e = dd(equal_weight_ret.reindex(a.index))
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=a.index, y=a.values, mode="lines", fill="tozeroy", name="Alpha Composite", line=dict(color=QFA_COLORS["risk_red"], width=2.5)))
+    fig.add_trace(go.Scatter(x=e.index, y=e.values, mode="lines", name="Equal Weight", line=dict(color=QFA_COLORS["gray"], width=2.0)))
+    fig.update_yaxes(title="Drawdown", tickformat=".0%")
+    return layout(fig, "Alpha Portfolio Drawdown", 700)
+
+
+def fig_alpha_turnover(turnover: pd.Series) -> go.Figure:
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=turnover.index, y=turnover.values, mode="lines", name="Daily Turnover", line=dict(color=QFA_COLORS["slate"], width=1.8)))
+    fig.add_trace(go.Scatter(x=turnover.index, y=turnover.rolling(21).mean(), mode="lines", name="21D Avg Turnover", line=dict(color=QFA_COLORS["muted_gold"], width=2.4)))
+    fig.update_yaxes(title="Turnover")
+    return layout(fig, "Alpha Portfolio Turnover", 650)
+
+
 def fig_garch_best(best: pd.DataFrame, store: Dict[str, Dict[str, Any]]) -> go.Figure:
     fig = go.Figure()
     for _, row in best.iterrows():
@@ -1677,6 +1978,14 @@ def main():
         boll_std = st.slider("Bollinger standard deviations", 1.0, 3.0, 2.0, 0.25)
 
         st.divider()
+        st.subheader("Alpha Engine Controls")
+        alpha_mom_short = st.slider("Momentum short lookback", 21, 126, 63, 21)
+        alpha_mom_long = st.slider("Momentum long lookback", 63, 252, 126, 21)
+        alpha_meanrev_window = st.slider("Mean-reversion z-score window", 21, 252, 63, 21)
+        alpha_vol_window = st.slider("Volatility quality window", 21, 252, 63, 21)
+        alpha_ic_horizon = st.slider("IC forward horizon", 5, 63, 21, 7)
+
+        st.divider()
         st.subheader("GARCH Controls")
         run_garch = st.checkbox("Run GARCH Lab", value=False)
         garch_mode = st.selectbox("GARCH model set", list(GARCH_MODEL_OPTIONS.keys()), index=0)
@@ -1712,6 +2021,23 @@ def main():
         return
 
     strategy_returns, strategy_weights, weights_df, opt_perf = build_strategy_set(prices, returns, rf, max_weight, custom_weights)
+
+    alpha_engine = build_alpha_engine(
+        prices=prices,
+        returns=returns,
+        rf=rf,
+        max_weight=max_weight,
+        momentum_short=alpha_mom_short,
+        momentum_long=alpha_mom_long,
+        meanrev_window=alpha_meanrev_window,
+        vol_window=alpha_vol_window,
+        ic_horizon=alpha_ic_horizon,
+    )
+    strategy_returns["Alpha Composite"] = alpha_engine["returns"]
+    strategy_weights["Alpha Composite"] = alpha_engine["weights"].iloc[-1].to_dict() if not alpha_engine["weights"].empty else {}
+
+    if "Alpha Composite" not in weights_df.columns:
+        weights_df["Alpha Composite"] = pd.Series(strategy_weights["Alpha Composite"]).reindex(weights_df["Ticker"]).fillna(0.0).values
 
     # Align strategies to benchmark
     for name in list(strategy_returns.keys()):
@@ -1756,6 +2082,9 @@ def main():
         "QuantStats",
         "Portfolio Strategy Notes",
         "Alpha Generation",
+        "Alpha Engine LIVE",
+        "Alpha IC Validation",
+        "Alpha Portfolio",
         "Info Hub",
         "Data Quality",
         "Export Center",
@@ -1990,6 +2319,38 @@ def main():
         ]))
 
     with tabs[16]:
+        st.subheader("Alpha Engine LIVE")
+        st.markdown(
+            "<div class='qfa-note'>This tab calculates live alpha signals from the selected universe. Signals are converted into dynamic long-only weights with a one-day lag to reduce look-ahead bias.</div>",
+            unsafe_allow_html=True,
+        )
+        safe_df(alpha_engine["snapshot"])
+        safe_chart(fig_alpha_scores(alpha_engine["composite"]))
+        safe_chart(fig_alpha_weights(alpha_engine["weights"]))
+
+    with tabs[17]:
+        st.subheader("Alpha IC Validation")
+        st.markdown(
+            "<div class='qfa-note'>Information Coefficient measures whether today’s signal ranks predict future return ranks. Positive and stable IC supports alpha credibility.</div>",
+            unsafe_allow_html=True,
+        )
+        safe_df(alpha_engine["ic_table"])
+        safe_chart(fig_ic_series(alpha_engine["signals"], returns, alpha_ic_horizon))
+
+    with tabs[18]:
+        st.subheader("Alpha Portfolio")
+        ew_ret = strategy_returns.get("Equal Weight")
+        safe_chart(fig_alpha_cumulative(alpha_engine["returns"], benchmark_returns, ew_ret))
+        safe_chart(fig_alpha_drawdown(alpha_engine["returns"], ew_ret))
+        safe_chart(fig_alpha_turnover(alpha_engine["turnover"]))
+
+        alpha_metrics = metrics_for_returns({"Alpha Composite": alpha_engine["returns"], "Equal Weight": ew_ret}, benchmark_returns, rf)
+        safe_df(alpha_metrics)
+
+        st.subheader("Alpha Governance Diagnostics")
+        safe_df(alpha_governance_table(alpha_engine["returns"], benchmark_returns, alpha_engine["weights"], alpha_engine["ic_table"], rf))
+
+    with tabs[19]:
         st.subheader("Info Hub")
         st.subheader("Proxy Transparency")
         safe_df(PROXY_TRANSPARENCY_TABLE)
@@ -2007,6 +2368,7 @@ def main():
             {"Strategy": "Inverse Volatility", "Definition": "Lower-volatility instruments receive larger weights."},
             {"Strategy": "Max Sharpe", "Definition": "PyPortfolioOpt expected Sharpe-maximizing portfolio."},
             {"Strategy": "Min Volatility", "Definition": "PyPortfolioOpt minimum-variance portfolio."},
+            {"Strategy": "Alpha Composite", "Definition": "Dynamic alpha portfolio generated from momentum, mean-reversion and volatility-quality signals."},
         ]))
         st.subheader("Deployment Diagnostics")
         safe_df(pd.DataFrame([
@@ -2017,12 +2379,12 @@ def main():
             {"Item": "Benchmark", "Value": f"{BENCHMARK_NAME} ({BENCHMARK_TICKER})"},
         ]))
 
-    with tabs[17]:
+    with tabs[20]:
         st.subheader("Data Quality")
         safe_df(quality)
         st.caption(f"Aligned prices: {prices.shape}; aligned returns: {returns.shape}; benchmark returns: {benchmark_returns.shape}")
 
-    with tabs[18]:
+    with tabs[21]:
         st.subheader("Export Center")
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -2035,6 +2397,8 @@ def main():
             st.download_button("Download strategy returns CSV", returns_csv(strategy_returns), "qfa_strategy_returns.csv", "text/csv")
             st.download_button("Download data quality CSV", df_csv(quality), "qfa_data_quality.csv", "text/csv")
             st.download_button("Download alpha methods CSV", df_csv(alpha_generation_methods_table()), "qfa_alpha_methods.csv", "text/csv")
+            st.download_button("Download alpha IC CSV", df_csv(alpha_engine["ic_table"]), "qfa_alpha_ic.csv", "text/csv")
+            st.download_button("Download alpha latest snapshot CSV", df_csv(alpha_engine["snapshot"]), "qfa_alpha_snapshot.csv", "text/csv")
 
 
 if __name__ == "__main__":
