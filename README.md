@@ -1,16 +1,26 @@
-# QFA Prime Finance Platform — Streamlit v4.11 Verified Tearsheet Metrics
+# QFA Prime Finance Platform — Streamlit v4.12 QuantStats-Format Tearsheet
 
-## Critical change
+## Critical Fix
 
-The QFA Institutional Tearsheet download is now unmistakable:
+The QFA Institutional Tearsheet HTML has been rebuilt into a QuantStats-style report format.
 
-- QFA Institutional Tearsheet button appears first.
-- Download filename includes `v411`.
-- HTML report contains visible marker: `v4.11 VERIFIED`.
-- The report contains the full section:
-  `QFA QuantStats-Style Metrics — v4.11 Verified`
+The downloaded HTML includes:
 
-If an old HTML appears, the deployed app is not v4.11 or the browser is opening an old downloaded file.
+- Report Content Audit
+- QuantStats-style summary metrics table
+- Key metrics snapshot
+- Cumulative return vs S&P 500 (^GSPC)
+- Drawdown chart
+- Top drawdown episodes
+- Rolling Sharpe / volatility / beta / tracking error
+- Benchmark-relative risk
+- Rolling VaR / CVaR
+- Return distribution
+- Monthly returns heatmap
+- Monthly returns table
+- Annual returns chart/table
+
+The report filename includes `v412`.
 
 ## Run
 
