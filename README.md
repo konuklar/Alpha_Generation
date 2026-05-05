@@ -1,26 +1,31 @@
-# QFA Prime Finance Platform — Streamlit v4.12 QuantStats-Format Tearsheet
+# QFA Prime Finance Platform — Streamlit v4.13 Advanced Risk Analytics Merge
 
-## Critical Fix
+Used uploaded improved v4.13 code as base.
 
-The QFA Institutional Tearsheet HTML has been rebuilt into a QuantStats-style report format.
+## Preserved
 
-The downloaded HTML includes:
+- Yahoo Finance only; no synthetic fallback
+- ETF proxy / futures transparency
+- S&P 500 benchmark: `^GSPC`
+- Portfolio strategies
+- Alpha Engine
+- QuantStats-format QFA Institutional Tearsheet
 
-- Report Content Audit
-- QuantStats-style summary metrics table
-- Key metrics snapshot
-- Cumulative return vs S&P 500 (^GSPC)
-- Drawdown chart
-- Top drawdown episodes
-- Rolling Sharpe / volatility / beta / tracking error
-- Benchmark-relative risk
-- Rolling VaR / CVaR
-- Return distribution
-- Monthly returns heatmap
-- Monthly returns table
-- Annual returns chart/table
+## Merged from uploaded improved code
 
-The report filename includes `v412`.
+- Advanced Risk & Performance Analytics tab
+- Gain-Loss Ratio
+- Martin Ratio
+- Pain Index / Pain Ratio
+- Kappa 3
+- Stutzer Index
+- Cornish-Fisher VaR / CVaR
+- Modified Sharpe using Cornish-Fisher VaR
+- Up / Down Capture Ratios
+- Appraisal Ratio
+- Kalman Filter Beta
+- Regime-Conditional Metrics
+- IC Decay Analysis
 
 ## Run
 
