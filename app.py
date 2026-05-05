@@ -116,7 +116,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "Streamlit Interactive v4.8 Institutional Tearsheet Upgrade"
+VERSION = "Streamlit Interactive v4.9 QuantStats-Style QFA Metrics Engine"
 TRADING_DAYS = 252
 DEFAULT_RF = 0.045
 MIN_START_DATE = dt.date(2018, 1, 1)
@@ -1746,6 +1746,232 @@ def fig_garch_resid(ticker: str, model_key: str, store: Dict[str, Dict[str, Any]
     return layout(fig, f"{COMMODITY_UNIVERSE.get(ticker, {}).get('display', ticker)} — GARCH Diagnostics", 850)
 
 
+
+# ============================================================
+# QFA QUANTSTATS-STYLE METRICS ENGINE
+# ============================================================
+
+def _clean_return_series(r: pd.Series) -> pd.Series:
+    x = r.copy()
+    x.index = pd.to_datetime(x.index)
+    try:
+        x.index = x.index.tz_localize(None)
+    except Exception:
+        pass
+    x = pd.to_numeric(x, errors="coerce")
+    x = x.replace([np.inf, -np.inf], np.nan).dropna()
+    x = x[~x.index.duplicated(keep="last")]
+    x = x.sort_index()
+    return x
+
+
+def cumulative_return(r: pd.Series) -> float:
+    x = _clean_return_series(r)
+    return (1 + x).prod() - 1 if len(x) else np.nan
+
+
+def cagr(r: pd.Series) -> float:
+    x = _clean_return_series(r)
+    if len(x) < 2:
+        return np.nan
+    years = max((x.index[-1] - x.index[0]).days / 365.25, len(x) / TRADING_DAYS)
+    return (1 + x).prod() ** (1 / years) - 1 if years > 0 else np.nan
+
+
+def downside_deviation(r: pd.Series, rf: float = 0.0) -> float:
+    x = _clean_return_series(r)
+    daily_rf = rf / TRADING_DAYS
+    downside = np.minimum(x - daily_rf, 0.0)
+    return np.sqrt(np.mean(downside ** 2)) * np.sqrt(TRADING_DAYS) if len(downside) else np.nan
+
+
+def sortino_ratio_qfa(r: pd.Series, rf: float = 0.0) -> float:
+    dd = downside_deviation(r, rf)
+    return np.nan if pd.isna(dd) or dd == 0 else (cagr(r) - rf) / dd
+
+
+def calmar_ratio_qfa(r: pd.Series) -> float:
+    mdd = abs(max_drawdown(r))
+    return np.nan if pd.isna(mdd) or mdd == 0 else cagr(r) / mdd
+
+
+def omega_ratio_qfa(r: pd.Series, threshold: float = 0.0) -> float:
+    x = _clean_return_series(r)
+    gains = (x - threshold).clip(lower=0).sum()
+    losses = (threshold - x).clip(lower=0).sum()
+    return np.nan if losses == 0 else gains / losses
+
+
+def ulcer_index_qfa(r: pd.Series) -> float:
+    x = _clean_return_series(r)
+    eq = (1 + x).cumprod()
+    dd = (eq / eq.cummax() - 1) * 100
+    return np.sqrt(np.mean(dd ** 2)) if len(dd) else np.nan
+
+
+def ulcer_performance_index_qfa(r: pd.Series, rf: float = 0.0) -> float:
+    ui = ulcer_index_qfa(r)
+    return np.nan if pd.isna(ui) or ui == 0 else (cagr(r) - rf) / (ui / 100)
+
+
+def expected_return_by_period(r: pd.Series, periods: int) -> float:
+    x = _clean_return_series(r)
+    return x.mean() * periods if len(x) else np.nan
+
+
+def win_rate_qfa(r: pd.Series) -> float:
+    x = _clean_return_series(r)
+    wins = (x > 0).sum()
+    total = (x != 0).sum()
+    return np.nan if total == 0 else wins / total
+
+
+def payoff_ratio_qfa(r: pd.Series) -> float:
+    x = _clean_return_series(r)
+    avg_win = x[x > 0].mean()
+    avg_loss = abs(x[x < 0].mean())
+    return np.nan if pd.isna(avg_win) or pd.isna(avg_loss) or avg_loss == 0 else avg_win / avg_loss
+
+
+def profit_factor_qfa(r: pd.Series) -> float:
+    x = _clean_return_series(r)
+    gross_profit = x[x > 0].sum()
+    gross_loss = abs(x[x < 0].sum())
+    return np.nan if gross_loss == 0 else gross_profit / gross_loss
+
+
+def gain_to_pain_qfa(r: pd.Series) -> float:
+    x = _clean_return_series(r)
+    total_gain = x.sum()
+    total_pain = abs(x[x < 0].sum())
+    return np.nan if total_pain == 0 else total_gain / total_pain
+
+
+def tail_ratio_qfa(r: pd.Series) -> float:
+    x = _clean_return_series(r)
+    left = abs(x.quantile(0.05))
+    right = x.quantile(0.95)
+    return np.nan if left == 0 else right / left
+
+
+def common_sense_ratio_qfa(r: pd.Series) -> float:
+    pf = profit_factor_qfa(r)
+    tr = tail_ratio_qfa(r)
+    return pf * tr if pd.notna(pf) and pd.notna(tr) else np.nan
+
+
+def kelly_criterion_qfa(r: pd.Series) -> float:
+    wr = win_rate_qfa(r)
+    pr = payoff_ratio_qfa(r)
+    return np.nan if pd.isna(wr) or pd.isna(pr) or pr == 0 else wr - (1 - wr) / pr
+
+
+def max_consecutive_count(r: pd.Series, positive: bool = True) -> int:
+    x = _clean_return_series(r)
+    cond = x > 0 if positive else x < 0
+    max_run = run = 0
+    for flag in cond:
+        if flag:
+            run += 1
+            max_run = max(max_run, run)
+        else:
+            run = 0
+    return int(max_run)
+
+
+def longest_drawdown_days_qfa(r: pd.Series) -> int:
+    x = _clean_return_series(r)
+    eq = (1 + x).cumprod()
+    underwater = eq < eq.cummax()
+    max_days = days = 0
+    for flag in underwater:
+        if flag:
+            days += 1
+            max_days = max(max_days, days)
+        else:
+            days = 0
+    return int(max_days)
+
+
+def active_return_series(p: pd.Series, b: pd.Series) -> pd.Series:
+    pp, bb = align_two(_clean_return_series(p), _clean_return_series(b), "Portfolio", "Benchmark")
+    return pp - bb
+
+
+def r_squared_qfa(p: pd.Series, b: pd.Series) -> float:
+    pp, bb = align_two(_clean_return_series(p), _clean_return_series(b), "Portfolio", "Benchmark")
+    corr = pp.corr(bb)
+    return corr ** 2 if pd.notna(corr) else np.nan
+
+
+def treynor_ratio_qfa(p: pd.Series, b: pd.Series, rf: float) -> float:
+    beta = beta_to_benchmark(p, b)
+    return np.nan if pd.isna(beta) or beta == 0 else (cagr(p) - rf) / beta
+
+
+def qfa_quantstats_style_metrics(strategy_name: str, r: pd.Series, benchmark: pd.Series, rf: float) -> pd.DataFrame:
+    p, b = align_two(_clean_return_series(r), _clean_return_series(benchmark), "Strategy", "Benchmark")
+
+    rows = [
+        ("Risk-Free Rate", rf, rf, "pct"),
+        ("Time in Market", (p != 0).mean(), (b != 0).mean(), "pct"),
+        ("Cumulative Return", cumulative_return(p), cumulative_return(b), "pct"),
+        ("CAGR", cagr(p), cagr(b), "pct"),
+        ("Sharpe", sharpe_ratio(p, rf), sharpe_ratio(b, rf), "num"),
+        ("Sortino", sortino_ratio_qfa(p, rf), sortino_ratio_qfa(b, rf), "num"),
+        ("Calmar", calmar_ratio_qfa(p), calmar_ratio_qfa(b), "num"),
+        ("Omega", omega_ratio_qfa(p), omega_ratio_qfa(b), "num"),
+        ("Max Drawdown", max_drawdown(p), max_drawdown(b), "pct"),
+        ("Longest DD Days", longest_drawdown_days_qfa(p), longest_drawdown_days_qfa(b), "int"),
+        ("Volatility (ann.)", annualized_volatility(p), annualized_volatility(b), "pct"),
+        ("Downside Deviation", downside_deviation(p, rf), downside_deviation(b, rf), "pct"),
+        ("R-Squared vs Benchmark", r_squared_qfa(p, b), 1.0, "num"),
+        ("Beta", beta_to_benchmark(p, b), 1.0, "num"),
+        ("Treynor Ratio", treynor_ratio_qfa(p, b, rf), treynor_ratio_qfa(b, b, rf), "num"),
+        ("Information Ratio", information_ratio(p, b), 0.0, "num"),
+        ("Skew", p.skew(), b.skew(), "num"),
+        ("Kurtosis", p.kurtosis(), b.kurtosis(), "num"),
+        ("Expected Daily", expected_return_by_period(p, 1), expected_return_by_period(b, 1), "pct"),
+        ("Expected Monthly", expected_return_by_period(p, 21), expected_return_by_period(b, 21), "pct"),
+        ("Expected Yearly", expected_return_by_period(p, TRADING_DAYS), expected_return_by_period(b, TRADING_DAYS), "pct"),
+        ("Kelly Criterion", kelly_criterion_qfa(p), kelly_criterion_qfa(b), "pct"),
+        ("Daily Value-at-Risk 95%", historical_var(p, 0.95), historical_var(b, 0.95), "pct"),
+        ("Expected Shortfall / CVaR 95%", historical_cvar(p, 0.95), historical_cvar(b, 0.95), "pct"),
+        ("Daily Value-at-Risk 99%", historical_var(p, 0.99), historical_var(b, 0.99), "pct"),
+        ("Expected Shortfall / CVaR 99%", historical_cvar(p, 0.99), historical_cvar(b, 0.99), "pct"),
+        ("Win Rate", win_rate_qfa(p), win_rate_qfa(b), "pct"),
+        ("Max Consecutive Wins", max_consecutive_count(p, True), max_consecutive_count(b, True), "int"),
+        ("Max Consecutive Losses", max_consecutive_count(p, False), max_consecutive_count(b, False), "int"),
+        ("Gain/Pain Ratio", gain_to_pain_qfa(p), gain_to_pain_qfa(b), "num"),
+        ("Payoff Ratio", payoff_ratio_qfa(p), payoff_ratio_qfa(b), "num"),
+        ("Profit Factor", profit_factor_qfa(p), profit_factor_qfa(b), "num"),
+        ("Tail Ratio", tail_ratio_qfa(p), tail_ratio_qfa(b), "num"),
+        ("Common Sense Ratio", common_sense_ratio_qfa(p), common_sense_ratio_qfa(b), "num"),
+        ("Ulcer Index", ulcer_index_qfa(p), ulcer_index_qfa(b), "num"),
+        ("Ulcer Performance Index", ulcer_performance_index_qfa(p, rf), ulcer_performance_index_qfa(b, rf), "num"),
+    ]
+
+    return pd.DataFrame(rows, columns=["Metric", strategy_name, BENCHMARK_NAME, "Format"])
+
+
+def _format_metric_value(v, fmt: str) -> str:
+    if pd.isna(v):
+        return ""
+    if fmt == "pct":
+        return f"{v:.2%}"
+    if fmt == "int":
+        return f"{int(v):,}"
+    return f"{v:.3f}"
+
+
+def qfa_metrics_display_table(metrics: pd.DataFrame) -> pd.DataFrame:
+    out = metrics.copy()
+    strategy_col = [c for c in out.columns if c not in ["Metric", BENCHMARK_NAME, "Format"]][0]
+    out[strategy_col] = [_format_metric_value(v, f) for v, f in zip(out[strategy_col], out["Format"])]
+    out[BENCHMARK_NAME] = [_format_metric_value(v, f) for v, f in zip(out[BENCHMARK_NAME], out["Format"])]
+    return out.drop(columns=["Format"])
+
+
 # ============================================================
 # EXPORTS
 # ============================================================
@@ -2313,6 +2539,10 @@ def main():
                 mime="text/html",
             )
 
+        st.subheader("QFA QuantStats-Style Metrics")
+        qfa_qs_metrics = qfa_quantstats_style_metrics(qs_strategy, strategy_returns[qs_strategy], benchmark_returns, rf)
+        safe_df(qfa_metrics_display_table(qfa_qs_metrics))
+
         st.subheader("Strategy Report Metrics")
         safe_df(all_strategy_metrics[all_strategy_metrics["Strategy / Instrument"] == qs_strategy])
 
@@ -2430,6 +2660,7 @@ def main():
             st.download_button("Download alpha methods CSV", df_csv(alpha_generation_methods_table()), "qfa_alpha_methods.csv", "text/csv")
             st.download_button("Download alpha IC CSV", df_csv(alpha_engine["ic_table"]), "qfa_alpha_ic.csv", "text/csv")
             st.download_button("Download alpha latest snapshot CSV", df_csv(alpha_engine["snapshot"]), "qfa_alpha_snapshot.csv", "text/csv")
+            st.download_button("Download QFA QuantStats-style metrics CSV", df_csv(qfa_quantstats_style_metrics(primary, strategy_returns[primary], benchmark_returns, rf)), "qfa_quantstats_style_metrics.csv", "text/csv")
 
 
 if __name__ == "__main__":
