@@ -1,41 +1,20 @@
-# QFA Prime Finance Platform — Streamlit v4.9 QuantStats-Style QFA Metrics Engine
+# QFA Prime Finance Platform — Streamlit v4.10 Tearsheet Metrics Render Fix
 
-## New in v4.9
+## Critical Fix
 
-QuantStats is preserved, but QFA Institutional Tearsheet now includes an internal QuantStats-style metrics engine.
+v4.10 guarantees that the downloaded QFA Institutional Tearsheet HTML includes the full QFA QuantStats-style metrics table.
 
-Added QFA-calculated metrics:
+Included in HTML:
 
-- Risk-Free Rate
-- Time in Market
-- Cumulative Return
-- CAGR
-- Sharpe
-- Sortino
-- Calmar
-- Omega
-- Max Drawdown
-- Longest Drawdown Days
-- Annual Volatility
-- Downside Deviation
-- R-Squared vs Benchmark
-- Beta
-- Treynor Ratio
-- Information Ratio
-- Skew / Kurtosis
-- Expected Daily / Monthly / Yearly
+- Sharpe, Sortino, Calmar, Omega
+- CAGR, cumulative return, annual volatility
+- Max drawdown, longest DD days
+- Beta, R², Treynor, Information Ratio vs ^GSPC
+- VaR 95/99, CVaR 95/99
+- Win rate, payoff ratio, profit factor
+- Gain/Pain, tail ratio, common sense ratio
 - Kelly Criterion
-- VaR 95 / 99
-- CVaR 95 / 99
-- Win Rate
-- Consecutive Wins / Losses
-- Gain/Pain Ratio
-- Payoff Ratio
-- Profit Factor
-- Tail Ratio
-- Common Sense Ratio
-- Ulcer Index
-- Ulcer Performance Index
+- Ulcer Index, Ulcer Performance Index
 
 Benchmark-relative metrics use S&P 500 (`^GSPC`).
 

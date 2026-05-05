@@ -116,7 +116,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "Streamlit Interactive v4.9 QuantStats-Style QFA Metrics Engine"
+VERSION = "Streamlit Interactive v4.10 Tearsheet Metrics Render Fix"
 TRADING_DAYS = 252
 DEFAULT_RF = 0.045
 MIN_START_DATE = dt.date(2018, 1, 1)
@@ -2000,10 +2000,18 @@ def qfa_institutional_tearsheet_html(
     metrics_row: pd.Series,
 ) -> bytes:
     """
-    Guaranteed fallback report. This is not QuantStats, but it prevents
-    report generation from failing in Streamlit Cloud when QuantStats breaks.
+    QFA Institutional Tearsheet.
+
+    This report is produced by the QFA engine and explicitly includes the
+    QuantStats-style institutional metrics table.
     """
     p, b = align_two(r, benchmark, "Portfolio", "Benchmark")
+
+    # CRITICAL: this is the extended QuantStats-style metric table that must
+    # appear inside the downloaded HTML report.
+    qfa_qs_metrics = qfa_quantstats_style_metrics(strategy_name, p, b, rf)
+    qfa_qs_display = qfa_metrics_display_table(qfa_qs_metrics)
+
     eq = (1 + p).cumprod()
     beq = (1 + b).cumprod()
     dd = eq / eq.cummax() - 1
@@ -2012,24 +2020,66 @@ def qfa_institutional_tearsheet_html(
     beta = rolling_beta(p, b, 63)
 
     fig_eq = go.Figure()
-    fig_eq.add_trace(go.Scatter(x=eq.index, y=eq.values, mode="lines", name=strategy_name, line=dict(color=QFA_COLORS["navy"], width=2.8)))
-    fig_eq.add_trace(go.Scatter(x=beq.index, y=beq.values, mode="lines", name=BENCHMARK_NAME, line=dict(color=QFA_COLORS["gray"], width=2.2, dash="dash")))
-    fig_eq = layout(fig_eq, f"{strategy_name} — Cumulative Return", 560)
+    fig_eq.add_trace(go.Scatter(
+        x=eq.index,
+        y=eq.values,
+        mode="lines",
+        name=strategy_name,
+        line=dict(color=QFA_COLORS["navy"], width=2.8),
+    ))
+    fig_eq.add_trace(go.Scatter(
+        x=beq.index,
+        y=beq.values,
+        mode="lines",
+        name=BENCHMARK_NAME,
+        line=dict(color=QFA_COLORS["gray"], width=2.2, dash="dash"),
+    ))
+    fig_eq = layout(fig_eq, f"{strategy_name} — Cumulative Return vs {BENCHMARK_NAME}", 560)
 
     fig_dd = go.Figure()
-    fig_dd.add_trace(go.Scatter(x=dd.index, y=dd.values, mode="lines", fill="tozeroy", name="Drawdown", line=dict(color=QFA_COLORS["risk_red"], width=2.2)))
+    fig_dd.add_trace(go.Scatter(
+        x=dd.index,
+        y=dd.values,
+        mode="lines",
+        fill="tozeroy",
+        name="Drawdown",
+        line=dict(color=QFA_COLORS["risk_red"], width=2.2),
+    ))
     fig_dd.update_yaxes(tickformat=".0%")
     fig_dd = layout(fig_dd, f"{strategy_name} — Drawdown", 560)
 
-    fig_risk = make_subplots(rows=2, cols=1, shared_xaxes=True, subplot_titles=["Rolling Tracking Error", "Rolling Beta"])
-    fig_risk.add_trace(go.Scatter(x=te.index, y=te.values, mode="lines", name="Tracking Error", line=dict(color=QFA_COLORS["muted_gold"], width=2.2)), row=1, col=1)
-    fig_risk.add_trace(go.Scatter(x=beta.index, y=beta.values, mode="lines", name="Beta", line=dict(color=QFA_COLORS["slate"], width=2.2)), row=2, col=1)
+    fig_risk = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        subplot_titles=["Rolling Tracking Error", "Rolling Beta"],
+    )
+    fig_risk.add_trace(go.Scatter(
+        x=te.index,
+        y=te.values,
+        mode="lines",
+        name="Tracking Error",
+        line=dict(color=QFA_COLORS["muted_gold"], width=2.2),
+    ), row=1, col=1)
+    fig_risk.add_trace(go.Scatter(
+        x=beta.index,
+        y=beta.values,
+        mode="lines",
+        name="Beta",
+        line=dict(color=QFA_COLORS["slate"], width=2.2),
+    ), row=2, col=1)
     fig_risk.update_yaxes(tickformat=".0%", row=1, col=1)
-    fig_risk = layout(fig_risk, f"{strategy_name} — Benchmark Relative Risk", 680)
+    fig_risk = layout(fig_risk, f"{strategy_name} — Benchmark Relative Risk vs {BENCHMARK_NAME}", 680)
 
     fig_tail = go.Figure()
     for i, col in enumerate(risk.columns):
-        fig_tail.add_trace(go.Scatter(x=risk.index, y=risk[col], mode="lines", name=col, line=dict(color=QFA_SEQUENCE[i % len(QFA_SEQUENCE)], width=2.0)))
+        fig_tail.add_trace(go.Scatter(
+            x=risk.index,
+            y=risk[col],
+            mode="lines",
+            name=col,
+            line=dict(color=QFA_SEQUENCE[i % len(QFA_SEQUENCE)], width=2.0),
+        ))
     fig_tail.update_yaxes(tickformat=".1%")
     fig_tail = layout(fig_tail, f"{strategy_name} — Rolling VaR / CVaR", 560)
 
@@ -2052,26 +2102,97 @@ def qfa_institutional_tearsheet_html(
     <head>
         <meta charset="utf-8">
         <title>QFA Institutional Tearsheet — {html.escape(strategy_name)}</title>
+        <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
         <style>
-            body {{ font-family: DejaVu Sans, Segoe UI, Arial, sans-serif; background:#f5f7fb; color:#111827; margin:0; }}
-            header {{ background:#0f172a; color:white; padding:26px 34px; border-bottom:5px solid #b08900; }}
-            main {{ padding:28px 36px; }}
-            h1 {{ margin:0; font-size:30px; }}
-            .note {{ background:#fff7ed; border-left:5px solid #92400e; padding:14px 16px; border-radius:8px; color:#78350f; margin:16px 0; }}
-            .qfa-table {{ width:100%; border-collapse:collapse; background:white; margin:18px 0; border-radius:12px; overflow:hidden; }}
-            .qfa-table th {{ background:#111827; color:white; text-align:left; padding:10px; }}
-            .qfa-table td {{ border-bottom:1px solid #e5e7eb; padding:10px; }}
+            body {{
+                font-family: DejaVu Sans, Segoe UI, Arial, sans-serif;
+                background:#f5f7fb;
+                color:#111827;
+                margin:0;
+            }}
+            header {{
+                background:#0f172a;
+                color:white;
+                padding:26px 34px;
+                border-bottom:5px solid #b08900;
+            }}
+            main {{
+                padding:28px 36px;
+            }}
+            h1 {{
+                margin:0;
+                font-size:30px;
+            }}
+            h2 {{
+                margin-top:28px;
+                color:#0f172a;
+                border-bottom:2px solid #e5e7eb;
+                padding-bottom:8px;
+            }}
+            .note {{
+                background:#fff7ed;
+                border-left:5px solid #92400e;
+                padding:14px 16px;
+                border-radius:8px;
+                color:#78350f;
+                margin:16px 0;
+                line-height:1.45;
+            }}
+            .qfa-table {{
+                width:100%;
+                border-collapse:collapse;
+                background:white;
+                margin:18px 0;
+                border-radius:12px;
+                overflow:hidden;
+                table-layout:fixed;
+                box-shadow:0 8px 18px rgba(15,23,42,.06);
+            }}
+            .qfa-table th {{
+                background:#111827;
+                color:white;
+                text-align:left;
+                padding:9px;
+                font-size:12px;
+            }}
+            .qfa-table td {{
+                border-bottom:1px solid #e5e7eb;
+                padding:8px;
+                font-size:12px;
+                white-space:normal;
+                word-break:break-word;
+                vertical-align:top;
+            }}
+            .metric-warning {{
+                font-size:12px;
+                color:#475569;
+                margin-top:-8px;
+            }}
         </style>
     </head>
     <body>
         <header>
             <h1>QFA Institutional Tearsheet — {html.escape(strategy_name)}</h1>
-            <p>Institutional strategy report generated by QFA Analytics Engine. Benchmark: S&amp;P 500 (^GSPC).</p>
+            <p>Benchmark: S&amp;P 500 (^GSPC)</p>
         </header>
         <main>
-            <div class="note">This report is generated from the same strategy return stream used inside the dashboard. It includes performance, drawdown, benchmark-relative risk, VaR and CVaR.</div>
-            <h2>Key Metrics</h2>
+            <div class="note">
+                This institutional report is generated from the selected strategy's validated daily return stream.
+                Benchmark-relative metrics are calculated against S&amp;P 500 (^GSPC).
+            </div>
+
+            <h2>QFA QuantStats-Style Metrics</h2>
+            <div class="metric-warning">
+                Includes Sharpe, Sortino, Calmar, Omega, CAGR, volatility, drawdown, Beta, R², Treynor,
+                Information Ratio, VaR/CVaR, win rate, payoff, profit factor, gain/pain, tail ratio,
+                common sense ratio, Kelly, Ulcer Index and UPI.
+            </div>
+            {_html_table(qfa_qs_display)}
+
+            <h2>Key Metrics Snapshot</h2>
             {_html_table(metrics_df)}
+
+            <h2>Performance Charts</h2>
             {_fig_to_html(fig_eq)}
             {_fig_to_html(fig_dd)}
             {_fig_to_html(fig_risk)}
@@ -2081,7 +2202,6 @@ def qfa_institutional_tearsheet_html(
     </html>
     """
     return html_doc.encode("utf-8")
-
 
 def quantstats_html(strategy_name: str, r: pd.Series, rf: float) -> tuple[Optional[bytes], str]:
     """
