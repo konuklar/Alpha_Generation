@@ -1901,7 +1901,7 @@ def main():
         <div class="qfa-hero">
             <h1>QFA Prime Finance Platform</h1>
             <p>Commodity Instrument Class — Institutional Interactive Strategy Lab</p>
-            <p>{VERSION} • Institutional muted theme • robust Yahoo downloader • ETF proxy/futures modes • Optimization • Risk • GARCH • QuantStats</p>
+            <p>Alpha Engine</p>
         </div>
         """,
         unsafe_allow_html=True,
