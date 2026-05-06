@@ -29,6 +29,7 @@
 # - NEW: Kalman Filter Beta
 # - NEW: Regime-Conditional Metrics
 # - NEW: IC Decay Analysis
+# - ENHANCED: Tearsheet includes all QuantStats ratios + advanced metrics
 #
 # Run:
 # streamlit run app.py
@@ -123,7 +124,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "Streamlit Interactive v4.13 Advanced Risk Analytics Merge"
+VERSION = "Streamlit Interactive v4.13 QuantStats-Format Tearsheet + Advanced Risk Analytics"
 TRADING_DAYS = 252
 DEFAULT_RF = 0.045
 MIN_START_DATE = dt.date(2018, 1, 1)
@@ -758,7 +759,6 @@ def gain_loss_ratio(r: pd.Series) -> float:
 
 def martin_ratio(r: pd.Series, rf: float = 0.0) -> float:
     """Martin Ratio = CAGR / Ulcer Index"""
-    # Ulcer index from qfa_quantstats_style_metrics equivalent
     x = _clean_return_series(r)
     eq = (1 + x).cumprod()
     dd = (eq / eq.cummax() - 1) * 100
@@ -2485,6 +2485,10 @@ def report_content_audit_table_qfa() -> pd.DataFrame:
     ])
 
 
+# ============================================================
+# QFA INSTITUTIONAL TEARSHEET HTML (ENHANCED)
+# ============================================================
+
 def qfa_institutional_tearsheet_html(
     strategy_name: str,
     r: pd.Series,
@@ -2494,48 +2498,126 @@ def qfa_institutional_tearsheet_html(
 ) -> bytes:
     """
     QFA Institutional Tearsheet — QuantStats-format style report.
-    This HTML intentionally includes the full metrics table and chart suite.
+    ENHANCED: Includes all QuantStats ratios + advanced risk metrics + additional figures.
     """
     p, b = align_two(r, benchmark, "Portfolio", "Benchmark")
 
+    # ============================================================
+    # 1. QuantStats-Style Metrics (existing)
+    # ============================================================
     qfa_qs_metrics = qfa_quantstats_style_metrics(strategy_name, p, b, rf)
     qfa_qs_display = qfa_metrics_display_table(qfa_qs_metrics)
 
+    # ============================================================
+    # 2. New Advanced Performance Ratios
+    # ============================================================
+    advanced_ratios = pd.DataFrame([
+        {"Metric": "Gain-Loss Ratio (Bernardo-Ledoit)", "Value": f"{gain_loss_ratio(p):.4f}", "Benchmark": f"{gain_loss_ratio(b):.4f}"},
+        {"Metric": "Martin Ratio (CAGR / Ulcer)", "Value": f"{martin_ratio(p, rf):.4f}", "Benchmark": f"{martin_ratio(b, rf):.4f}"},
+        {"Metric": "Pain Index", "Value": f"{pain_index(p):.4f}", "Benchmark": f"{pain_index(b):.4f}"},
+        {"Metric": "Pain Ratio", "Value": f"{pain_ratio(p, rf):.4f}", "Benchmark": f"{pain_ratio(b, rf):.4f}"},
+        {"Metric": "Kappa 3 (Lower Partial Moment)", "Value": f"{kappa_3_ratio(p):.4f}", "Benchmark": f"{kappa_3_ratio(b):.4f}"},
+        {"Metric": "Stutzer Performance Index", "Value": f"{stutzer_index(p):.4f}", "Benchmark": f"{stutzer_index(b):.4f}"},
+    ])
+
+    # ============================================================
+    # 3. Cornish-Fisher Risk Metrics
+    # ============================================================
+    cf_metrics = pd.DataFrame([
+        {"Metric": "Historical VaR 95%", "Value": f"{historical_var(p, 0.95):.2%}", "Benchmark": f"{historical_var(b, 0.95):.2%}"},
+        {"Metric": "Cornish-Fisher VaR 95%", "Value": f"{cornish_fisher_var(p, 0.95):.2%}", "Benchmark": f"{cornish_fisher_var(b, 0.95):.2%}"},
+        {"Metric": "Historical CVaR 95%", "Value": f"{historical_cvar(p, 0.95):.2%}", "Benchmark": f"{historical_cvar(b, 0.95):.2%}"},
+        {"Metric": "Cornish-Fisher CVaR 95%", "Value": f"{cornish_fisher_cvar(p, 0.95):.2%}", "Benchmark": f"{cornish_fisher_cvar(b, 0.95):.2%}"},
+        {"Metric": "Modified Sharpe (CF-VaR)", "Value": f"{modified_sharpe_cf(p, rf, 0.95):.4f}", "Benchmark": f"{modified_sharpe_cf(b, rf, 0.95):.4f}"},
+        {"Metric": "Historical VaR 99%", "Value": f"{historical_var(p, 0.99):.2%}", "Benchmark": f"{historical_var(b, 0.99):.2%}"},
+        {"Metric": "Cornish-Fisher VaR 99%", "Value": f"{cornish_fisher_var(p, 0.99):.2%}", "Benchmark": f"{cornish_fisher_var(b, 0.99):.2%}"},
+    ])
+
+    # ============================================================
+    # 4. Benchmark-Relative Advanced Metrics
+    # ============================================================
+    capture = capture_ratios(p, b)
+    benchmark_relative = pd.DataFrame([
+        {"Metric": "Up Capture Ratio", "Value": f"{capture.get('Up Capture Ratio', np.nan):.4f}"},
+        {"Metric": "Down Capture Ratio", "Value": f"{capture.get('Down Capture Ratio', np.nan):.4f}"},
+        {"Metric": "Capture Ratio (Up/Down)", "Value": f"{capture.get('Capture Ratio (Up/Down)', np.nan):.4f}"},
+        {"Metric": "Appraisal Ratio (Alpha / Residual Vol)", "Value": f"{appraisal_ratio(p, b, rf):.4f}"},
+        {"Metric": "Information Ratio", "Value": f"{information_ratio(p, b):.4f}"},
+        {"Metric": "Treynor Ratio", "Value": f"{treynor_ratio_qfa(p, b, rf):.4f}"},
+        {"Metric": "R-Squared", "Value": f"{r_squared_qfa(p, b):.4f}"},
+    ])
+
+    # ============================================================
+    # 5. Additional Figures (Charts)
+    # ============================================================
+    
+    # Cumulative return
     eq = (1 + p).cumprod()
     beq = (1 + b).cumprod()
     dd = eq / eq.cummax() - 1
     risk = rolling_var_cvar(p, 63)
     te = rolling_tracking_error(p, b, 63)
     beta = rolling_beta(p, b, 63)
-
+    
     fig_eq = go.Figure()
     fig_eq.add_trace(go.Scatter(x=eq.index, y=eq.values, mode="lines", name=strategy_name, line=dict(color=QFA_COLORS["navy"], width=2.8)))
     fig_eq.add_trace(go.Scatter(x=beq.index, y=beq.values, mode="lines", name=BENCHMARK_NAME, line=dict(color=QFA_COLORS["gray"], width=2.2, dash="dash")))
     fig_eq.update_yaxes(title="Growth of $1")
     fig_eq = layout(fig_eq, f"{strategy_name} — Cumulative Return vs {BENCHMARK_NAME}", 560)
-
+    
+    # Drawdown
     fig_dd = go.Figure()
     fig_dd.add_trace(go.Scatter(x=dd.index, y=dd.values, mode="lines", fill="tozeroy", name="Drawdown", line=dict(color=QFA_COLORS["risk_red"], width=2.2)))
     fig_dd.update_yaxes(tickformat=".0%")
     fig_dd = layout(fig_dd, f"{strategy_name} — Underwater Drawdown", 560)
-
+    
+    # Rolling risk
     fig_risk = make_subplots(rows=2, cols=1, shared_xaxes=True, subplot_titles=["Rolling Tracking Error", "Rolling Beta"])
     fig_risk.add_trace(go.Scatter(x=te.index, y=te.values, mode="lines", name="Tracking Error", line=dict(color=QFA_COLORS["muted_gold"], width=2.2)), row=1, col=1)
     fig_risk.add_trace(go.Scatter(x=beta.index, y=beta.values, mode="lines", name="Beta", line=dict(color=QFA_COLORS["slate"], width=2.2)), row=2, col=1)
     fig_risk.update_yaxes(tickformat=".0%", row=1, col=1)
     fig_risk = layout(fig_risk, f"{strategy_name} — Benchmark Relative Risk vs {BENCHMARK_NAME}", 680)
-
+    
+    # Tail risk
     fig_tail = go.Figure()
     for i, col in enumerate(risk.columns):
         fig_tail.add_trace(go.Scatter(x=risk.index, y=risk[col], mode="lines", name=col, line=dict(color=QFA_SEQUENCE[i % len(QFA_SEQUENCE)], width=2.0)))
     fig_tail.update_yaxes(tickformat=".1%")
     fig_tail = layout(fig_tail, f"{strategy_name} — Rolling VaR / CVaR", 560)
-
+    
+    # Rolling metrics
     fig_roll = rolling_metrics_figure_qfa(p, b, rf)
+    
+    # Monthly and annual figures
     fig_month = monthly_heatmap_figure_qfa(p)
     fig_annual = annual_returns_figure_qfa(p)
     fig_dist = return_distribution_figure_qfa(p)
-
+    
+    # NEW: Advanced ratios bar chart
+    adv_plot_data = pd.DataFrame({
+        "Metric": ["Gain-Loss", "Martin", "Pain Ratio", "Kappa 3", "Stutzer"],
+        "Strategy": [gain_loss_ratio(p), martin_ratio(p, rf), pain_ratio(p, rf), kappa_3_ratio(p), stutzer_index(p)],
+        "Benchmark": [gain_loss_ratio(b), martin_ratio(b, rf), pain_ratio(b, rf), kappa_3_ratio(b), stutzer_index(b)]
+    })
+    fig_adv = go.Figure()
+    fig_adv.add_trace(go.Bar(x=adv_plot_data["Metric"], y=adv_plot_data["Strategy"], name=strategy_name, marker_color=QFA_COLORS["navy"]))
+    fig_adv.add_trace(go.Bar(x=adv_plot_data["Metric"], y=adv_plot_data["Benchmark"], name=BENCHMARK_NAME, marker_color=QFA_COLORS["gray"]))
+    fig_adv.update_yaxes(title="Ratio Value")
+    fig_adv = layout(fig_adv, "Advanced Performance Ratios Comparison", 500)
+    
+    # NEW: Cornish-Fisher vs Historical VaR comparison
+    cf_plot_data = pd.DataFrame({
+        "VaR Type": ["VaR 95%", "CVaR 95%", "VaR 99%", "CVaR 99%"],
+        "Historical": [historical_var(p, 0.95), historical_cvar(p, 0.95), historical_var(p, 0.99), historical_cvar(p, 0.99)],
+        "Cornish-Fisher": [cornish_fisher_var(p, 0.95), cornish_fisher_cvar(p, 0.95), cornish_fisher_var(p, 0.99), cornish_fisher_cvar(p, 0.99)]
+    })
+    fig_cf = go.Figure()
+    fig_cf.add_trace(go.Bar(x=cf_plot_data["VaR Type"], y=cf_plot_data["Historical"], name="Historical", marker_color=QFA_COLORS["steel"]))
+    fig_cf.add_trace(go.Bar(x=cf_plot_data["VaR Type"], y=cf_plot_data["Cornish-Fisher"], name="Cornish-Fisher", marker_color=QFA_COLORS["muted_gold"]))
+    fig_cf.update_yaxes(title="Risk Level", tickformat=".1%")
+    fig_cf = layout(fig_cf, "Historical vs Cornish-Fisher Risk Metrics", 500)
+    
+    # Key metrics snapshot table
     metrics_df = pd.DataFrame([{
         "Strategy": strategy_name,
         "Annual Return": f"{metrics_row['Annual Return']:.2%}",
@@ -2547,21 +2629,44 @@ def qfa_institutional_tearsheet_html(
         "Tracking Error": f"{metrics_row['Tracking Error vs Benchmark']:.2%}",
         "Beta": f"{metrics_row['Beta vs Benchmark']:.2f}",
         "Information Ratio": f"{metrics_row['Information Ratio']:.2f}",
+        "Gain-Loss Ratio": f"{gain_loss_ratio(p):.2f}",
+        "Martin Ratio": f"{martin_ratio(p, rf):.2f}",
+        "Kappa 3": f"{kappa_3_ratio(p):.2f}",
+        "Modified Sharpe (CF)": f"{modified_sharpe_cf(p, rf, 0.95):.2f}",
     }])
-
+    
+    # Monthly and annual tables
     monthly_tbl = monthly_returns_table_qfa(p).copy()
     monthly_html = monthly_tbl.applymap(lambda v: "" if pd.isna(v) else f"{v:.2%}").to_html(
         border=0, classes="qfa-table", escape=False
     ) if not monthly_tbl.empty else "<p>No monthly return table available.</p>"
-
+    
     annual_tbl = annual_returns_table_qfa(p)
     annual_html = html_table_formatted(annual_tbl, pct_cols=["Annual Return"]) if not annual_tbl.empty else "<p>No annual return table available.</p>"
-
+    
     dd_tbl = drawdown_details_qfa(p)
     dd_html = html_table_formatted(dd_tbl, pct_cols=["Max Drawdown"]) if not dd_tbl.empty else "<p>No drawdown episode table available.</p>"
-
+    
     audit_html = html_table_formatted(report_content_audit_table_qfa())
+    
+    # Capture ratios pie chart for interpretation
+    capture_pie_data = pd.DataFrame({
+        "Category": ["Up Capture", "Down Capture"],
+        "Ratio": [capture.get("Up Capture Ratio", 0), capture.get("Down Capture Ratio", 0)]
+    })
+    fig_capture = go.Figure(data=[go.Pie(
+        labels=capture_pie_data["Category"], 
+        values=capture_pie_data["Ratio"],
+        marker_colors=[QFA_COLORS["green"], QFA_COLORS["risk_red"]],
+        hole=0.4,
+        textinfo="label+percent"
+    )])
+    fig_capture = layout(fig_capture, "Capture Ratios Distribution", 450)
 
+    # ============================================================
+    # 6. HTML Document Assembly
+    # ============================================================
+    
     html_doc = f"""
     <!DOCTYPE html>
     <html>
@@ -2589,6 +2694,11 @@ def qfa_institutional_tearsheet_html(
                 color:#0f172a;
                 border-bottom:2px solid #e5e7eb;
                 padding-bottom:8px;
+            }}
+            h3 {{
+                margin-top:20px;
+                color:#334155;
+                font-size:18px;
             }}
             .note {{
                 background:#fff7ed;
@@ -2640,65 +2750,134 @@ def qfa_institutional_tearsheet_html(
                 grid-template-columns: 1fr 1fr;
                 gap:18px;
             }}
+            .three-col {{
+                display:grid;
+                grid-template-columns: 1fr 1fr 1fr;
+                gap:18px;
+            }}
             @media (max-width: 1000px) {{
                 .two-col {{ grid-template-columns: 1fr; }}
+                .three-col {{ grid-template-columns: 1fr; }}
             }}
         </style>
     </head>
     <body>
         <header>
             <h1>QFA Institutional Tearsheet — {html.escape(strategy_name)}</h1>
-            <p>Benchmark: S&amp;P 500 (^GSPC)</p>
+            <p>Benchmark: S&amp;P 500 (^GSPC) | Generated: {dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
         </header>
         <main>
             <div class="verified">
-                v4.13 VERIFIED — This downloaded HTML contains the full QuantStats-style ratio table and chart suite + Advanced Risk Analytics.
+                v4.13 ENHANCED — This report includes QuantStats-style ratios, Advanced Risk Metrics (Gain-Loss, Martin, Kappa 3, Stutzer), 
+                Cornish-Fisher VaR/CVaR, Capture Ratios, Appraisal Ratio, and comprehensive chart suite.
             </div>
             <div class="note">
-                This report is generated from the selected strategy's validated daily return stream.
+                This report is generated from the selected strategy's validated daily return stream (Yahoo Finance only, no synthetic data).
                 Benchmark-relative metrics are calculated against S&amp;P 500 (^GSPC).
             </div>
 
+            <!-- Report Content Audit -->
             <h2>Report Content Audit</h2>
             {audit_html}
 
+            <!-- QuantStats-Style Summary Metrics -->
             <h2>QuantStats-Style Summary Metrics</h2>
             {_html_table(qfa_qs_display)}
 
+            <!-- Key Metrics Snapshot -->
             <h2>Key Metrics Snapshot</h2>
             {_html_table(metrics_df)}
 
+            <!-- Advanced Performance Ratios -->
+            <h2>Advanced Performance Ratios</h2>
+            <div class="two-col">
+                <div>
+                    <h3>Advanced Ratios</h3>
+                    {_html_table(advanced_ratios)}
+                </div>
+                <div>
+                    <h3>Cornish-Fisher Risk Metrics</h3>
+                    {_html_table(cf_metrics)}
+                </div>
+            </div>
+
+            <!-- Benchmark-Relative Metrics -->
+            <h2>Benchmark-Relative Metrics</h2>
+            <div class="two-col">
+                <div>
+                    {_html_table(benchmark_relative)}
+                </div>
+                <div>
+                    {_fig_to_html(fig_capture)}
+                </div>
+            </div>
+
+            <!-- Performance Charts -->
             <h2>Performance Overview</h2>
             {_fig_to_html(fig_eq)}
 
             <h2>Drawdown Analytics</h2>
-            {_fig_to_html(fig_dd)}
-            <h3>Top Drawdown Episodes</h3>
-            {dd_html}
+            <div class="two-col">
+                <div>{_fig_to_html(fig_dd)}</div>
+                <div>
+                    <h3>Top Drawdown Episodes</h3>
+                    {dd_html}
+                </div>
+            </div>
 
+            <!-- Rolling Risk Metrics -->
             <h2>Rolling Risk / Return Metrics</h2>
             {_fig_to_html(fig_roll)}
 
+            <!-- Benchmark Relative Risk -->
             <h2>Benchmark Relative Risk</h2>
             {_fig_to_html(fig_risk)}
 
+            <!-- Tail Risk -->
             <h2>Tail Risk — VaR / CVaR</h2>
-            {_fig_to_html(fig_tail)}
+            <div class="two-col">
+                <div>{_fig_to_html(fig_tail)}</div>
+                <div>{_fig_to_html(fig_cf)}</div>
+            </div>
 
+            <!-- Return Distribution -->
             <h2>Return Distribution</h2>
-            {_fig_to_html(fig_dist)}
+            <div class="two-col">
+                <div>{_fig_to_html(fig_dist)}</div>
+                <div>{_fig_to_html(fig_adv)}</div>
+            </div>
 
+            <!-- Monthly and Annual Returns -->
             <h2>Monthly and Annual Returns</h2>
-            {_fig_to_html(fig_month)}
+            <div class="two-col">
+                <div>{_fig_to_html(fig_month)}</div>
+                <div>{_fig_to_html(fig_annual)}</div>
+            </div>
+
             <h3>Monthly Returns Table</h3>
             {monthly_html}
+
             <h3>Annual Returns Table</h3>
             {annual_html}
+
+            <!-- Footer with interpretation guide -->
+            <div class="note" style="margin-top:30px;">
+                <strong>Interpretation Guide:</strong><br>
+                • <strong>Gain-Loss Ratio &gt; 1.5</strong> indicates favorable return asymmetry.<br>
+                • <strong>Martin Ratio / Pain Ratio</strong> penalize drawdown severity (higher is better).<br>
+                • <strong>Kappa 3</strong> focuses on large loss avoidance (higher is better).<br>
+                • <strong>Stutzer Index</strong> penalizes catastrophic losses.<br>
+                • <strong>Cornish-Fisher VaR</strong> adjusts for skewness/kurtosis - compare with historical VaR.<br>
+                • <strong>Capture Ratio &gt; 1</strong> means portfolio outperforms benchmark in both up/down markets.<br>
+                • <strong>Appraisal Ratio</strong> measures active return per unit of residual risk (higher = better active management).<br>
+                • <strong>Modified Sharpe (CF)</strong> uses Cornish-Fisher VaR as risk measure.
+            </div>
         </main>
     </body>
     </html>
     """
     return html_doc.encode("utf-8")
+
 
 def quantstats_html(strategy_name: str, r: pd.Series, rf: float) -> Tuple[Optional[bytes], str]:
     """
