@@ -30,6 +30,7 @@
 # - NEW: Regime-Conditional Metrics
 # - NEW: IC Decay Analysis
 # - ENHANCED: Tearsheet includes all QuantStats ratios + advanced metrics
+# - FIXED: Max weight cap now dynamically respects equal weight
 #
 # Run:
 # streamlit run app.py
@@ -729,9 +730,7 @@ def rolling_sharpe(r: pd.Series, rf: float, window: int) -> pd.Series:
     daily_rf = rf / TRADING_DAYS
     excess = r - daily_rf
     return excess.rolling(window).mean() / excess.rolling(window).std() * np.sqrt(TRADING_DAYS)
-
-
-# ============================================================
+    # ============================================================
 # ADVANCED PERFORMANCE RATIOS (QFA INSTITUTIONAL)
 # ============================================================
 
@@ -1915,7 +1914,6 @@ def fig_corr(returns: pd.DataFrame) -> go.Figure:
     return layout(fig, "Commodity Return Correlation Matrix", 650)
 
 
-
 def fig_log_return_difference(log_ret: pd.DataFrame, base_ticker: str) -> go.Figure:
     diff = return_difference_series(log_ret, base_ticker)
     fig = go.Figure()
@@ -1974,7 +1972,6 @@ def fig_underwater_recovery(strategy_returns: Dict[str, pd.Series], selected: Li
         fig.add_trace(go.Scatter(x=dd.index, y=dd.values, mode="lines", name=name, line=dict(color=color_for_name(name, i), width=2.0)))
     fig.update_yaxes(title="Underwater Drawdown", tickformat=".0%")
     return layout(fig, "Underwater Chart — Strategy Recovery Profile", 720)
-
 
 
 def fig_alpha_scores(signal: pd.DataFrame) -> go.Figure:
@@ -2083,9 +2080,7 @@ def fig_garch_resid(ticker: str, model_key: str, store: Dict[str, Dict[str, Any]
     fig.add_trace(go.Scatter(x=resid.index, y=resid.values, mode="lines", name="Std Resid"), row=2, col=1)
     fig.add_trace(go.Scatter(x=resid.index, y=(resid**2).values, mode="lines", name="Sq Resid"), row=2, col=2)
     return layout(fig, f"{COMMODITY_UNIVERSE.get(ticker, {}).get('display', ticker)} — GARCH Diagnostics", 850)
-
-
-# ============================================================
+    # ============================================================
 # QFA QUANTSTATS-STYLE METRICS ENGINE
 # ============================================================
 
@@ -2882,9 +2877,6 @@ def qfa_institutional_tearsheet_html(
 def quantstats_html(strategy_name: str, r: pd.Series, rf: float) -> Tuple[Optional[bytes], str]:
     """
     Robust QuantStats report generator.
-
-    QuantStats is preserved. The strategy return stream is cleaned before report
-    generation. Any technical status is handled internally so board-facing UI stays clean.
     """
     if not QS_AVAILABLE:
         return None, "QuantStats package not available."
@@ -3003,7 +2995,6 @@ def main():
         end_date = st.date_input("End date", DEFAULT_END, min_value=MIN_START_DATE, max_value=DEFAULT_END)
 
         rf = st.number_input("Risk-free rate", 0.0, 0.30, DEFAULT_RF, 0.005, format="%.3f")
-        max_weight = st.slider("Optimization max single weight", 0.20, 1.00, 0.45, 0.05)
 
         st.divider()
         st.subheader("Data Discipline")
@@ -3018,6 +3009,32 @@ def main():
             custom_raw[ticker] = st.number_input(f"{label} weight", 0.0, 100.0, 100.0 / max(len(selected_tickers), 1), 1.0)
         raw_sum = sum(custom_raw.values())
         custom_weights = {k: (v / raw_sum if raw_sum > 0 else 0) for k, v in custom_raw.items()}
+
+        st.divider()
+        st.subheader("Optimization Constraints")
+        
+        # Dinamik max_weight hesaplama - EQUAL WEIGHT FIX
+        n_instruments = len(selected_tickers) if selected_tickers else 5
+        equal_weight_pct = 1.0 / n_instruments if n_instruments > 0 else 0.20
+        suggested_max_weight = min(0.45, equal_weight_pct * 2.5)
+        
+        st.caption(f"📊 **Equal weight per instrument:** {equal_weight_pct:.1%}")
+        st.caption(f"💡 **Suggested max weight cap:** {suggested_max_weight:.1%} (2.5× equal weight)")
+        
+        max_weight = st.slider(
+            "Optimization max single weight", 
+            min_value=equal_weight_pct,
+            max_value=1.00, 
+            value=suggested_max_weight,
+            step=0.05,
+            help=f"Equal weight is {equal_weight_pct:.1%}. Values above {equal_weight_pct * 2:.0%} may cause concentration."
+        )
+        
+        if max_weight > equal_weight_pct * 2:
+            st.warning(f"⚠️ Max weight cap ({max_weight:.1%}) exceeds 2× equal weight ({equal_weight_pct * 2:.1%}). Portfolio may become concentrated.")
+        elif max_weight < equal_weight_pct:
+            st.error(f"❌ Max weight cap ({max_weight:.1%}) cannot be less than equal weight ({equal_weight_pct:.1%}). Adjusting to {equal_weight_pct:.1%}.")
+            max_weight = equal_weight_pct
 
         st.divider()
         st.subheader("Risk Controls")
@@ -3115,7 +3132,7 @@ def main():
     instrument_metrics = metrics_for_returns(instrument_map, benchmark_returns, rf)
     quality = data_quality_report(raw_prices, prices, returns)
 
-    primary = selected_strategies[0]
+    primary = selected_strategies[0] if selected_strategies else all_strategy_names[0]
     primary_row = all_strategy_metrics[all_strategy_metrics["Strategy / Instrument"] == primary].iloc[0]
 
     tabs = st.tabs([
@@ -3152,6 +3169,7 @@ def main():
             <div class="qfa-note">
             Primary strategy: <b>{primary}</b>. Active data mode: <b>{mode_label}</b>.
             Sidebar parameters remain active: custom weights, RF rate, max weight constraint, rolling window, TE bands, GARCH model set and Bollinger settings.
+            Equal weight per instrument: <b>{equal_weight_pct:.1%}</b> | Max weight cap: <b>{max_weight:.1%}</b>
             </div>
             """,
             unsafe_allow_html=True,
@@ -3173,13 +3191,17 @@ def main():
         with c2[0]: kpi_card("Data Mode", mode_label, "transparent source", "neutral")
         with c2[1]: kpi_card("Instruments", str(len(selected_tickers)), "selected", "neutral")
         with c2[2]: kpi_card("Obs.", str(len(returns)), "daily aligned", "neutral")
-        with c2[3]: kpi_card("Max Weight", fmt_pct(max_weight), "optimization cap", "neutral")
+        with c2[3]: kpi_card("Max Weight", fmt_pct(max_weight), f"optimization cap (EW: {equal_weight_pct:.0%})", "neutral")
         with c2[4]: kpi_card("Rolling Window", str(rolling_window), "trading days", "neutral")
 
         safe_chart(fig_strategy_cumulative(strategy_returns, benchmark_returns, selected_strategies))
         safe_chart(fig_risk_return(strategy_metrics))
         safe_df(interpretation)
 
+    # ============================================================
+    # TAB 1-11 (Portfolio Weights through Rolling Sharpe)
+    # ============================================================
+    
     with tabs[1]:
         st.subheader("Portfolio Weights")
         st.markdown("<div class='qfa-note'>Weights are recalculated from sidebar inputs and optimization settings.</div>", unsafe_allow_html=True)
@@ -3272,7 +3294,7 @@ def main():
         st.markdown("<div class='qfa-note'>Rolling Sharpe helps users understand whether risk-adjusted performance is stable or only period-specific.</div>", unsafe_allow_html=True)
 
     # ============================================================
-    # NEW TAB: Advanced Risk & Performance Analytics
+    # TAB 12: Advanced Risk & Performance Analytics
     # ============================================================
     with tabs[12]:
         st.subheader("Advanced Risk & Performance Analytics")
@@ -3283,7 +3305,6 @@ def main():
             unsafe_allow_html=True,
         )
         
-        # Seçilen strateji için gelişmiş metrikler
         adv_strategy = st.selectbox(
             "Select strategy for advanced analysis",
             options=selected_strategies,
@@ -3295,7 +3316,6 @@ def main():
             adv_r = strategy_returns[adv_strategy]
             adv_p, adv_b = align_two(adv_r, benchmark_returns, adv_strategy, "Benchmark")
             
-            # Yeni rasyoları hesapla
             col1, col2, col3 = st.columns(3)
             
             with col1:
@@ -3333,7 +3353,6 @@ def main():
             
             st.divider()
             
-            # Kalman Beta vs Rolling Beta karşılaştırması
             st.subheader("Kalman Filter Beta vs Rolling Beta")
             col_k1, col_k2 = st.columns(2)
             
@@ -3359,7 +3378,6 @@ def main():
                 safe_chart(layout(fig_beta_compare, f"Beta Estimation Methods Comparison — {adv_strategy}", 550))
             
             with col_k2:
-                # Beta farkı istatistikleri
                 common_idx = beta_dict["Rolling Beta"].index.intersection(beta_dict["Kalman Beta"].index)
                 if len(common_idx) > 0:
                     diff = beta_dict["Kalman Beta"].loc[common_idx] - beta_dict["Rolling Beta"].loc[common_idx]
@@ -3371,12 +3389,10 @@ def main():
             
             st.divider()
             
-            # Regime-Conditional Metrics
             st.subheader("Volatility Regime Analysis")
             regime_df = regime_conditional_metrics(adv_r, benchmark_returns)
             safe_df(regime_df)
             
-            # GARCH VaR (if available)
             if run_garch and 'garch_store' in locals() and garch_store:
                 st.subheader("GARCH-Conditional VaR (from fitted models)")
                 garch_var_df = []
@@ -3399,13 +3415,15 @@ def main():
             - **Kalman Beta** is smoother and more adaptive than rolling window beta.
             """)
 
+    # ============================================================
+    # TAB 13: GARCH Volatility Lab
+    # ============================================================
     with tabs[13]:
         st.subheader("GARCH Volatility Lab")
         st.markdown("<div class='qfa-note'>GARCH is fitted to individual commodities, not portfolio strategies.</div>", unsafe_allow_html=True)
         if run_garch:
             with st.spinner("Running GARCH models..."):
                 garch_table, best_garch, garch_store_local = run_garch_suite(returns, tuple(GARCH_MODEL_OPTIONS[garch_mode]))
-                # Store for later use
                 garch_store = garch_store_local
             safe_df(best_garch)
             safe_chart(fig_garch_best(best_garch, garch_store))
@@ -3427,6 +3445,9 @@ def main():
             st.info("Enable 'Run GARCH Lab' in the sidebar.")
             garch_store = {}
 
+    # ============================================================
+    # TAB 14: QFA Tearsheet Reports
+    # ============================================================
     with tabs[14]:
         st.subheader("QFA Tearsheet Reports | Select Your Strategy First!")
         st.markdown(
@@ -3446,7 +3467,6 @@ def main():
         )
 
         c_report_1, c_report_2 = st.columns(2)
-
         safe_strategy_name = qs_strategy.lower().replace(" ", "_").replace("/", "_")
 
         with c_report_1:
@@ -3478,10 +3498,14 @@ def main():
         st.subheader("Strategy Report Metrics")
         safe_df(all_strategy_metrics[all_strategy_metrics["Strategy / Instrument"] == qs_strategy])
 
+    # ============================================================
+    # TAB 15-22 (Portfolio Strategy Notes through Export Center)
+    # ============================================================
+    
     with tabs[15]:
         st.subheader("Portfolio Strategy Notes")
         st.markdown(
-            "<div class='qfa-note'>This table explains each portfolio strategy in a board-readable format: objective, weighting logic, strengths, weaknesses and governance interpretation.</div>",
+            "<div class='qfa-note'>This table explains each portfolio strategy in a board-readable format.</div>",
             unsafe_allow_html=True,
         )
         st.markdown("<div class='compact-notes'>", unsafe_allow_html=True)
@@ -3491,30 +3515,20 @@ def main():
     with tabs[16]:
         st.subheader("Alpha Generation")
         st.markdown(
-            "<div class='qfa-note'>Alpha generation must be governed as a research pipeline: economic rationale, signal design, validation, cost control, risk model, portfolio construction and live monitoring.</div>",
+            "<div class='qfa-note'>Alpha generation must be governed as a research pipeline.</div>",
             unsafe_allow_html=True,
         )
         st.subheader("Alpha Methods Library")
         st.markdown("<div class='compact-notes'>", unsafe_allow_html=True)
         safe_df(alpha_generation_methods_table())
         st.markdown("</div>", unsafe_allow_html=True)
-
         st.subheader("Alpha Research Pipeline")
         safe_df(alpha_research_pipeline_table())
-
-        st.subheader("Practical Alpha Module Roadmap")
-        safe_df(pd.DataFrame([
-            {"Module": "Signal Lab", "Feature": "Momentum, mean reversion, volatility, carry and factor signals.", "Purpose": "Generate candidate alpha scores."},
-            {"Module": "IC Monitor", "Feature": "Rolling IC / rank IC and signal decay curves.", "Purpose": "Validate predictive power."},
-            {"Module": "Alpha-to-Weights Engine", "Feature": "Convert alpha scores into constrained active weights.", "Purpose": "Translate research into portfolio decisions."},
-            {"Module": "Active Risk Budget", "Feature": "Tracking Error, beta and factor exposure limits.", "Purpose": "Prevent uncontrolled benchmark-relative risk."},
-            {"Module": "Governance Panel", "Feature": "Signal health, drawdown, turnover and model confidence flags.", "Purpose": "Explain to management when the model should or should not be trusted."},
-        ]))
 
     with tabs[17]:
         st.subheader("Alpha Engine LIVE")
         st.markdown(
-            "<div class='qfa-note'>This tab calculates live alpha signals from the selected universe. Signals are converted into dynamic long-only weights with a one-day lag to reduce look-ahead bias.</div>",
+            "<div class='qfa-note'>This tab calculates live alpha signals from the selected universe.</div>",
             unsafe_allow_html=True,
         )
         safe_df(alpha_engine["snapshot"])
@@ -3524,13 +3538,12 @@ def main():
     with tabs[18]:
         st.subheader("Alpha IC Validation")
         st.markdown(
-            "<div class='qfa-note'>Information Coefficient measures whether today’s signal ranks predict future return ranks. Positive and stable IC supports alpha credibility.</div>",
+            "<div class='qfa-note'>Information Coefficient measures whether today's signal ranks predict future return ranks.</div>",
             unsafe_allow_html=True,
         )
         safe_df(alpha_engine["ic_table"])
         safe_chart(fig_ic_series(alpha_engine["signals"], returns, alpha_ic_horizon))
         
-        # IC Decay Analysis
         st.subheader("IC Decay Analysis")
         st.markdown("<div class='qfa-note'>How does predictive power decay with forecast horizon?</div>", unsafe_allow_html=True)
         ic_decay_df = information_coefficient_decay(alpha_engine["signals"], returns, max_lag=10)
@@ -3559,10 +3572,8 @@ def main():
         safe_chart(fig_alpha_cumulative(alpha_engine["returns"], benchmark_returns, ew_ret))
         safe_chart(fig_alpha_drawdown(alpha_engine["returns"], ew_ret))
         safe_chart(fig_alpha_turnover(alpha_engine["turnover"]))
-
         alpha_metrics = metrics_for_returns({"Alpha Composite": alpha_engine["returns"], "Equal Weight": ew_ret}, benchmark_returns, rf)
         safe_df(alpha_metrics)
-
         st.subheader("Alpha Governance Diagnostics")
         safe_df(alpha_governance_table(alpha_engine["returns"], benchmark_returns, alpha_engine["weights"], alpha_engine["ic_table"], rf))
 
@@ -3570,22 +3581,12 @@ def main():
         st.subheader("Info Hub")
         st.subheader("Proxy Transparency")
         safe_df(PROXY_TRANSPARENCY_TABLE)
-        st.caption("ETF proxy mode is explicit and visible. It is not synthetic data and not hidden futures replacement.")
-
+        st.caption("ETF proxy mode is explicit and visible. It is not synthetic data.")
         info_df = pd.DataFrame([
             {"Ticker": k, "Display Name": v["display"], "Full Name": v["name"], "Instrument Class": v["class"], "Source": "Yahoo Finance"}
             for k, v in COMMODITY_UNIVERSE.items()
         ])
         safe_df(info_df)
-        st.subheader("Strategy Definitions")
-        safe_df(pd.DataFrame([
-            {"Strategy": "Equal Weight", "Definition": "Same weight for each selected instrument."},
-            {"Strategy": "User Custom Weights", "Definition": "Sidebar weights normalized to 100%."},
-            {"Strategy": "Inverse Volatility", "Definition": "Lower-volatility instruments receive larger weights."},
-            {"Strategy": "Max Sharpe", "Definition": "PyPortfolioOpt expected Sharpe-maximizing portfolio."},
-            {"Strategy": "Min Volatility", "Definition": "PyPortfolioOpt minimum-variance portfolio."},
-            {"Strategy": "Alpha Composite", "Definition": "Dynamic alpha portfolio generated from momentum, mean-reversion and volatility-quality signals."},
-        ]))
         st.subheader("Deployment Diagnostics")
         safe_df(pd.DataFrame([
             {"Item": "Version", "Value": VERSION},
