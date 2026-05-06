@@ -125,7 +125,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "Streamlit Interactive v4.13 QuantStats-Format Tearsheet + Advanced Risk Analytics"
+VERSION = "Streamlit Interactive v4.14 Institutional Build"
 TRADING_DAYS = 252
 DEFAULT_RF = 0.045
 MIN_START_DATE = dt.date(2018, 1, 1)
