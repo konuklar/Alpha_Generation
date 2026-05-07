@@ -125,7 +125,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "Streamlit Interactive v4.14 Institutional Build"
+VERSION = "Streamlit Interactive v4.15 Tracking Error Calibration Fix"
 TRADING_DAYS = 252
 DEFAULT_RF = 0.045
 MIN_START_DATE = dt.date(2018, 1, 1)
@@ -680,6 +680,56 @@ def information_ratio(p: pd.Series, b: pd.Series) -> float:
 def rolling_tracking_error(p: pd.Series, b: pd.Series, window: int) -> pd.Series:
     p, b = align_two(p, b, "Portfolio", "Benchmark")
     return (p - b).rolling(window).std() * np.sqrt(TRADING_DAYS)
+
+
+def tracking_error_reference_lines(
+    strategy_returns: Dict[str, pd.Series],
+    benchmark: pd.Series,
+    selected: List[str],
+    window: int,
+    te_target: float,
+    te_band: float,
+    mode: str = "Realized TE distribution",
+) -> Tuple[float, float, float, pd.DataFrame]:
+    """
+    Builds tracking-error reference lines in the same annualized scale as rolling TE.
+
+    Manual mode uses the user's target/band. Realized distribution mode uses the
+    actual rolling TE panel so target/bands cannot be visually detached from the
+    calculated series.
+    """
+    panel = []
+    for name in selected:
+        if name in strategy_returns:
+            s = rolling_tracking_error(strategy_returns[name], benchmark, window).rename(name)
+            panel.append(s)
+    te_panel = pd.concat(panel, axis=1).dropna(how="all") if panel else pd.DataFrame()
+
+    if te_panel.empty or mode == "Manual target from sidebar":
+        target = float(te_target)
+        lower = max(float(te_target) - float(te_band), 0.0)
+        upper = float(te_target) + float(te_band)
+        return target, lower, upper, te_panel
+
+    stacked = te_panel.stack().dropna()
+    if stacked.empty:
+        target = float(te_target)
+        lower = max(float(te_target) - float(te_band), 0.0)
+        upper = float(te_target) + float(te_band)
+        return target, lower, upper, te_panel
+
+    target = float(stacked.median())
+    lower = float(stacked.quantile(0.25))
+    upper = float(stacked.quantile(0.75))
+
+    # If the IQR collapses, fall back to a tight realized band around median.
+    if upper <= lower:
+        realized_std = float(stacked.std()) if pd.notna(stacked.std()) else 0.0
+        band = max(realized_std * 0.50, 0.0025)
+        lower = max(target - band, 0.0)
+        upper = target + band
+
+    return target, lower, upper, te_panel
 
 
 def rolling_beta(p: pd.Series, b: pd.Series, window: int) -> pd.Series:
@@ -1852,7 +1902,7 @@ def fig_performance_bars(metrics: pd.DataFrame) -> go.Figure:
     return layout(fig, "Performance Metrics Dashboard", 820)
 
 
-def fig_te_beta(strategy_returns: Dict[str, pd.Series], benchmark: pd.Series, selected: List[str], window: int, te_target: float, te_band: float) -> go.Figure:
+def fig_te_beta(strategy_returns: Dict[str, pd.Series], benchmark: pd.Series, selected: List[str], window: int, te_target: float, te_band: float, te_reference_mode: str = "Realized TE distribution") -> go.Figure:
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, subplot_titles=["Rolling Tracking Error", "Rolling Beta"])
     for name in selected:
         if name in strategy_returns:
@@ -1860,9 +1910,12 @@ def fig_te_beta(strategy_returns: Dict[str, pd.Series], benchmark: pd.Series, se
             beta = rolling_beta(strategy_returns[name], benchmark, window)
             fig.add_trace(go.Scatter(x=te.index, y=te.values, mode="lines", name=f"{name} TE", line=dict(color=color_for_name(name, selected.index(name) if name in selected else 0), width=2.2)), row=1, col=1)
             fig.add_trace(go.Scatter(x=beta.index, y=beta.values, mode="lines", name=f"{name} Beta", line=dict(color=color_for_name(name, selected.index(name) if name in selected else 0), width=2.2)), row=2, col=1)
-    fig.add_hline(y=te_target, line_dash="dash", annotation_text="TE Target", row=1, col=1)
-    fig.add_hline(y=te_target + te_band, line_dash="dot", annotation_text="Upper Band", row=1, col=1)
-    fig.add_hline(y=max(te_target - te_band, 0), line_dash="dot", annotation_text="Lower Band", row=1, col=1)
+    ref_target, ref_lower, ref_upper, _ = tracking_error_reference_lines(
+        strategy_returns, benchmark, selected, window, te_target, te_band, te_reference_mode
+    )
+    fig.add_hline(y=ref_target, line_dash="dash", annotation_text=f"TE Target ({ref_target:.1%})", row=1, col=1)
+    fig.add_hline(y=ref_upper, line_dash="dot", annotation_text=f"Upper TE ({ref_upper:.1%})", row=1, col=1)
+    fig.add_hline(y=ref_lower, line_dash="dot", annotation_text=f"Lower TE ({ref_lower:.1%})", row=1, col=1)
     fig.add_hline(y=1.0, line_dash="dash", annotation_text="Beta = 1", row=2, col=1)
     fig.update_yaxes(tickformat=".0%", row=1, col=1)
     return layout(fig, "Rolling Tracking Error and Rolling Beta", 820)
@@ -3039,8 +3092,13 @@ def main():
         st.divider()
         st.subheader("Risk Controls")
         rolling_window = st.slider("Rolling window", 21, 252, 63, 21)
-        te_target = st.number_input("Tracking Error target", 0.0, 0.50, 0.06, 0.01)
-        te_band = st.number_input("Tracking Error band", 0.0, 0.20, 0.02, 0.01)
+        te_reference_mode = st.selectbox(
+            "TE reference mode",
+            options=["Realized TE distribution", "Manual target from sidebar"],
+            index=0,
+        )
+        te_target = st.number_input("Tracking Error target", 0.0, 1.50, 0.06, 0.01)
+        te_band = st.number_input("Tracking Error band", 0.0, 0.75, 0.02, 0.01)
 
         st.divider()
         st.subheader("Advanced Spread / Bollinger")
@@ -3240,15 +3298,46 @@ def main():
 
     with tabs[6]:
         st.subheader("Tracking Error")
+        st.markdown(
+            "<div class='qfa-note'>Rolling Tracking Error is annualized: std(portfolio return - ^GSPC return) × √252. "
+            "In Realized TE distribution mode, the target and bands are calculated from the actual rolling TE panel "
+            "using median / 25th percentile / 75th percentile, so the reference lines stay on the same scale as the calculation. "
+            "Manual mode uses the sidebar target and band exactly.</div>",
+            unsafe_allow_html=True,
+        )
+
+        ref_target, ref_lower, ref_upper, te_panel = tracking_error_reference_lines(
+            strategy_returns, benchmark_returns, selected_strategies, rolling_window, te_target, te_band, te_reference_mode
+        )
+
         te_fig = make_subplots(rows=1, cols=1)
-        for name in selected_strategies:
-            te = rolling_tracking_error(strategy_returns[name], benchmark_returns, rolling_window)
-            te_fig.add_trace(go.Scatter(x=te.index, y=te.values, mode="lines", name=name))
-        te_fig.add_hline(y=te_target, line_dash="dash", annotation_text="TE Target")
-        te_fig.add_hline(y=te_target + te_band, line_dash="dot", annotation_text="Upper Band")
-        te_fig.add_hline(y=max(te_target - te_band, 0), line_dash="dot", annotation_text="Lower Band")
-        te_fig.update_yaxes(tickformat=".0%")
-        safe_chart(layout(te_fig, f"{rolling_window}-Day Rolling Tracking Error", 720))
+        for idx, name in enumerate(selected_strategies):
+            if name in strategy_returns:
+                te = rolling_tracking_error(strategy_returns[name], benchmark_returns, rolling_window)
+                te_fig.add_trace(go.Scatter(
+                    x=te.index, y=te.values, mode="lines", name=name,
+                    line=dict(color=color_for_name(name, idx), width=2.2)
+                ))
+        te_fig.add_hline(y=ref_target, line_dash="dash", annotation_text=f"TE Target ({ref_target:.1%})")
+        te_fig.add_hline(y=ref_upper, line_dash="dot", annotation_text=f"Upper TE ({ref_upper:.1%})")
+        te_fig.add_hline(y=ref_lower, line_dash="dot", annotation_text=f"Lower TE ({ref_lower:.1%})")
+        te_fig.update_yaxes(tickformat=".0%", title="Annualized Rolling Tracking Error")
+        safe_chart(layout(te_fig, f"{rolling_window}-Day Rolling Tracking Error vs {BENCHMARK_NAME}", 720))
+
+        if not te_panel.empty:
+            te_summary = pd.DataFrame({
+                "Strategy": te_panel.columns,
+                "Latest TE": [te_panel[c].dropna().iloc[-1] if te_panel[c].dropna().size else np.nan for c in te_panel.columns],
+                "Median TE": [te_panel[c].median() for c in te_panel.columns],
+                "TE 25%": [te_panel[c].quantile(0.25) for c in te_panel.columns],
+                "TE 75%": [te_panel[c].quantile(0.75) for c in te_panel.columns],
+            })
+            safe_df(te_summary)
+
+        st.caption(
+            f"Active TE reference mode: {te_reference_mode}. "
+            f"Displayed target={ref_target:.2%}, lower={ref_lower:.2%}, upper={ref_upper:.2%}."
+        )
 
     with tabs[7]:
         st.subheader("VaR / CVaR")
