@@ -1,14 +1,20 @@
-# QFA Prime Finance Platform — v4.15 Tracking Error Fix
+# QFA Prime Finance Platform — Streamlit v4.16 Executive Report Engine
 
-Fixes Tracking Error reference lines.
+## Updates
 
-## What changed
+- Adds subtitle under main app header:
+  `By MK FinTECH LabGEN@2026 Istanbul`
+- Adds the same institutional branding into exported HTML Tearsheet.
+- Adds HTML footer.
+- Adds subtle report watermark.
+- Adds Executive Summary — Board View inside HTML report.
+- Adds Board Decision Flags inside HTML report.
+- Preserves all existing QuantStats-style metrics and report charts.
+- Keeps benchmark as S&P 500 (`^GSPC`).
 
-- Added TE reference mode in sidebar.
-- Default mode: Realized TE distribution.
-- TE target line = median of calculated rolling TE panel.
-- Lower/upper TE bands = 25th/75th percentile of calculated rolling TE panel.
-- Manual target mode still available.
-- Tracking Error tab now shows TE summary table.
+## Run
 
-This keeps target and band lines on the same annualized scale as the rolling TE calculations.
+```bash
+pip install -r requirements.txt
+streamlit run app.py
+```
