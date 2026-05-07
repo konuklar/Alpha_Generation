@@ -125,7 +125,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "Streamlit Interactive v4.15 Tracking Error Calibration Fix"
+VERSION = "Streamlit Interactive v4.16 Executive Report Engine"
 TRADING_DAYS = 252
 DEFAULT_RF = 0.045
 MIN_START_DATE = dt.date(2018, 1, 1)
@@ -137,6 +137,8 @@ DEFAULT_FFILL_LIMIT = 3
 
 BENCHMARK_TICKER = "^GSPC"
 BENCHMARK_NAME = "S&P 500 Daily Index"
+
+BRAND_SIGNATURE = "By MK FinTECH LabGEN@2026 Istanbul"
 
 COMMODITY_UNIVERSE: Dict[str, Dict[str, str]] = {
     "CL=F": {"name": "Crude Oil WTI Futures", "class": "Energy", "display": "Crude Oil"},
@@ -263,6 +265,23 @@ st.markdown(
             margin: 7px 0 0;
             color: #cbd5e1;
             font-size: 15px;
+        }
+
+        .qfa-signature {
+            color: #9CA3AF;
+            font-size: 14px;
+            font-weight: 600;
+            margin-top: -4px;
+            letter-spacing: .02em;
+        }
+        .qfa-exec-note {
+            background: #f8fafc;
+            border-left: 5px solid #334155;
+            padding: 14px 16px;
+            border-radius: 10px;
+            color: #334155;
+            line-height: 1.55;
+            margin: 12px 0 18px;
         }
         .qfa-note {
             background: #fff7ed;
@@ -2537,7 +2556,85 @@ def report_content_audit_table_qfa() -> pd.DataFrame:
 # QFA INSTITUTIONAL TEARSHEET HTML (ENHANCED)
 # ============================================================
 
-def qfa_institutional_tearsheet_html(
+
+def qfa_executive_summary_table(strategy_name: str, r: pd.Series, benchmark: pd.Series, rf: float) -> pd.DataFrame:
+    p, b = align_two(r, benchmark, "Strategy", "Benchmark")
+    cap = capture_ratios(p, b) if "capture_ratios" in globals() else {
+        "Up Capture Ratio": np.nan,
+        "Down Capture Ratio": np.nan,
+        "Capture Ratio (Up/Down)": np.nan,
+    }
+    return pd.DataFrame([
+        {"Executive Question": "What is the selected strategy?", "Answer": strategy_name},
+        {"Executive Question": "What benchmark is used?", "Answer": "S&P 500 Daily Index (^GSPC)"},
+        {"Executive Question": "What is the annualized return?", "Answer": fmt_pct(annualized_return(p))},
+        {"Executive Question": "What is the annualized volatility?", "Answer": fmt_pct(annualized_volatility(p))},
+        {"Executive Question": "What is the Sharpe ratio?", "Answer": fmt_num(sharpe_ratio(p, rf))},
+        {"Executive Question": "What is the maximum drawdown?", "Answer": fmt_pct(max_drawdown(p))},
+        {"Executive Question": "What is the tracking error vs ^GSPC?", "Answer": fmt_pct(tracking_error(p, b))},
+        {"Executive Question": "What is beta vs ^GSPC?", "Answer": fmt_num(beta_to_benchmark(p, b))},
+        {"Executive Question": "What is Information Ratio vs ^GSPC?", "Answer": fmt_num(information_ratio(p, b))},
+        {"Executive Question": "What is daily CVaR 95%?", "Answer": fmt_pct(historical_cvar(p, 0.95))},
+        {"Executive Question": "What is Up Capture?", "Answer": fmt_num(cap.get("Up Capture Ratio", np.nan))},
+        {"Executive Question": "What is Down Capture?", "Answer": fmt_num(cap.get("Down Capture Ratio", np.nan))},
+    ])
+
+
+def qfa_board_decision_flags(strategy_name: str, r: pd.Series, benchmark: pd.Series, rf: float) -> pd.DataFrame:
+    p, b = align_two(r, benchmark, "Strategy", "Benchmark")
+    rows = []
+    sharpe = sharpe_ratio(p, rf)
+    mdd = max_drawdown(p)
+    te = tracking_error(p, b)
+    ir = information_ratio(p, b)
+    beta = beta_to_benchmark(p, b)
+    cvar = historical_cvar(p, 0.95)
+
+    def flag(name, value, rule, status, note):
+        rows.append({"Check": name, "Value": value, "Rule": rule, "Status": status, "Board Note": note})
+
+    flag("Sharpe Discipline", fmt_num(sharpe), "> 0.50 preferred", "PASS" if pd.notna(sharpe) and sharpe > 0.50 else "WATCH", "Risk-adjusted return quality.")
+    flag("Drawdown Control", fmt_pct(mdd), "Above -35% preferred", "PASS" if pd.notna(mdd) and mdd > -0.35 else "WATCH", "Capital loss severity.")
+    flag("Active Risk", fmt_pct(te), "Below 25% preferred", "PASS" if pd.notna(te) and te < 0.25 else "WATCH", "Benchmark-relative deviation.")
+    flag("Information Ratio", fmt_num(ir), "> 0 preferred", "PASS" if pd.notna(ir) and ir > 0 else "WATCH", "Active return per unit of TE.")
+    flag("Beta Exposure", fmt_num(beta), "Govern by mandate", "INFO", "Sensitivity to S&P 500.")
+    flag("Tail Risk", fmt_pct(cvar), "Monitor CVaR", "INFO", "Expected loss beyond VaR threshold.")
+    return pd.DataFrame(rows)
+
+
+def qfa_html_footer() -> str:
+    return f"""
+    <footer style="
+        margin-top:40px;
+        padding:20px;
+        text-align:center;
+        font-size:12px;
+        color:#9CA3AF;
+        border-top:1px solid #E5E7EB;
+    ">
+        {BRAND_SIGNATURE}
+    </footer>
+    """
+
+
+def qfa_html_watermark() -> str:
+    return """
+    <div style="
+        position:fixed;
+        bottom:10px;
+        right:20px;
+        opacity:0.08;
+        font-size:28px;
+        color:#0f172a;
+        pointer-events:none;
+        z-index:0;
+    ">
+        MK FinTECH LabGEN
+    </div>
+    """
+
+
+def qfa_institutional_tearsheet_v416_html(
     strategy_name: str,
     r: pd.Series,
     benchmark: pd.Series,
@@ -2715,6 +2812,11 @@ def qfa_institutional_tearsheet_html(
     # 6. HTML Document Assembly
     # ============================================================
     
+    exec_summary_html = html_table_formatted(qfa_executive_summary_table(strategy_name, p, b, rf))
+    decision_flags_html = html_table_formatted(qfa_board_decision_flags(strategy_name, p, b, rf))
+    footer_html = qfa_html_footer()
+    watermark_html = qfa_html_watermark()
+
     html_doc = f"""
     <!DOCTYPE html>
     <html>
@@ -2810,6 +2912,7 @@ def qfa_institutional_tearsheet_html(
         </style>
     </head>
     <body>
+        {watermark_html}
         <header>
             <h1>QFA Institutional Tearsheet — {html.escape(strategy_name)}</h1>
             <p>Benchmark: S&amp;P 500 (^GSPC) | Generated: {dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
@@ -2825,6 +2928,12 @@ def qfa_institutional_tearsheet_html(
             </div>
 
             <!-- Report Content Audit -->
+            <h2>Executive Summary — Board View</h2>
+            {exec_summary_html}
+
+            <h2>Board Decision Flags</h2>
+            {decision_flags_html}
+
             <h2>Report Content Audit</h2>
             {audit_html}
 
@@ -2921,6 +3030,7 @@ def qfa_institutional_tearsheet_html(
                 • <strong>Modified Sharpe (CF)</strong> uses Cornish-Fisher VaR as risk measure.
             </div>
         </main>
+        {footer_html}
     </body>
     </html>
     """
@@ -3217,6 +3327,7 @@ def main():
         "Info Hub",
         "Data Quality",
         "Export Center",
+        "Executive Report Engine",
     ])
 
     with tabs[0]:
@@ -3547,7 +3658,7 @@ def main():
         qs_bytes, qs_status = quantstats_html(qs_strategy, strategy_returns[qs_strategy], rf)
 
         selected_metric_row = all_strategy_metrics[all_strategy_metrics["Strategy / Instrument"] == qs_strategy].iloc[0]
-        institutional_tearsheet_bytes = qfa_institutional_tearsheet_html(
+        institutional_tearsheet_bytes = qfa_institutional_tearsheet_v416_html(
             qs_strategy,
             strategy_returns[qs_strategy],
             benchmark_returns,
@@ -3562,7 +3673,7 @@ def main():
             st.download_button(
                 f"Download QFA Institutional Tearsheet — {qs_strategy}",
                 data=institutional_tearsheet_bytes,
-                file_name=f"qfa_institutional_tearsheet_v413_{safe_strategy_name}.html",
+                file_name=f"qfa_institutional_tearsheet_v416_{safe_strategy_name}.html",
                 mime="text/html",
             )
 
@@ -3571,7 +3682,7 @@ def main():
                 st.download_button(
                     f"Download QuantStats HTML — {qs_strategy}",
                     data=qs_bytes,
-                    file_name=f"qfa_quantstats_v413_{safe_strategy_name}.html",
+                    file_name=f"qfa_quantstats_v416_{safe_strategy_name}.html",
                     mime="text/html",
                 )
             else:
