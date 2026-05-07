@@ -1,38 +1,36 @@
 # ============================================================
-# QFA PRIME FINANCE PLATFORM — STREAMLIT v4.14
-# TRUE HEDGE FUND VERSION
-#
+# QFA PRIME FINANCE PLATFORM — STREAMLIT v4 INTERACTIVE
 # Commodity Instrument Class + Advanced KPI Layout
 #
-# Features:
+# Features preserved and expanded:
 # - Yahoo Finance only, no synthetic fallback
-# - Crude Oil, Gold, Silver, Platinum, Natural Gas (Futures + ETF Proxies)
+# - Crude Oil, Gold, Silver, Platinum, Natural Gas
 # - Strict equal-length daily data preparation
 # - Benchmark alignment with ^GSPC
-# - Portfolio strategies (Equal Weight, Custom, Inverse Vol, Max Sharpe, Min Volatility)
+# - Portfolio strategies:
+#   Equal Weight, User Custom Weights, Inverse Volatility,
+#   Max Sharpe, Min Volatility
 # - PyPortfolioOpt optimization
-# - Advanced KPI layout with institutional color system
-# - Performance metrics (Return, Vol, Sharpe, Drawdown, VaR, CVaR, Beta, TE, IR)
+# - Advanced KPI layout
+# - Performance metrics
 # - Rolling Beta (Enhanced with Kalman Filter alternative)
-# - Tracking Error with institutional bands
-# - VaR / CVaR (Historical + Cornish-Fisher corrected)
-# - Advanced Performance Ratios (Gain-Loss, Martin, Pain, Kappa 3, Stutzer)
-# - Capture Ratios (Up/Down), Appraisal Ratio
-# - Regime-Conditional Metrics
-# - IC Decay Analysis
-# - Strategy Ranking Engine (multi-metric ranking)
-# - GARCH Volatility Lab with institutional model selection
-# - QFA Institutional Tearsheet (QuantStats format + advanced metrics)
-# - Full export capabilities
-#
-# FIXES in v4.14:
-# - Fixed cagr() undefined function
-# - Fixed rolling_sharpe scope issue
-# - Fixed VaR sign consistency (negative values)
-# - Fixed CVaR calculation (proper expected shortfall)
-# - Removed all duplicate functions
-# - Added Strategy Ranking Engine
-# - Enhanced Risk Dashboard KPI colors
+# - Tracking Error
+# - VaR / CVaR (Enhanced with Cornish-Fisher)
+# - Drawdown
+# - Correlation
+# - Portfolio weights
+# - QuantStats export
+# - GARCH Volatility Lab
+# - Info Hub + Data Quality
+# - NEW: Advanced Risk & Performance Analytics Tab
+# - NEW: Gain-Loss Ratio, Martin Ratio, Pain Index, Kappa 3, Stutzer Index
+# - NEW: Cornish-Fisher VaR/CVaR, Modified Sharpe
+# - NEW: Up/Down Capture Ratios, Appraisal Ratio
+# - NEW: Kalman Filter Beta
+# - NEW: Regime-Conditional Metrics
+# - NEW: IC Decay Analysis
+# - ENHANCED: Tearsheet includes all QuantStats ratios + advanced metrics
+# - FIXED: Max weight cap now dynamically respects equal weight
 #
 # Run:
 # streamlit run app.py
@@ -95,7 +93,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import yfinance as yf
-from scipy import stats as scipy_stats
+from scipy import stats as st_stats
 
 import plotly.graph_objects as go
 import plotly.express as px
@@ -121,13 +119,13 @@ except Exception:
 # ============================================================
 
 st.set_page_config(
-    page_title="QFA Prime Finance Platform | v4.14",
+    page_title="QFA Prime Finance Platform",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-VERSION = "Streamlit v4.14 - True Hedge Fund Version"
+VERSION = "Streamlit Interactive v4.14 Institutional Build"
 TRADING_DAYS = 252
 DEFAULT_RF = 0.045
 MIN_START_DATE = dt.date(2018, 1, 1)
@@ -164,6 +162,14 @@ UNIVERSE_MODES = {
 }
 
 
+FUTURES_TO_PROXY_MAP = {
+    "CL=F": "USO",
+    "GC=F": "GLD",
+    "SI=F": "SLV",
+    "PL=F": "PPLT",
+    "NG=F": "UNG",
+}
+
 PROXY_TRANSPARENCY_TABLE = pd.DataFrame([
     {"Exposure": "Crude Oil", "Futures Ticker": "CL=F", "ETF Proxy": "USO", "Proxy Name": "United States Oil Fund LP"},
     {"Exposure": "Gold", "Futures Ticker": "GC=F", "ETF Proxy": "GLD", "Proxy Name": "SPDR Gold Shares"},
@@ -184,6 +190,7 @@ GARCH_MODEL_OPTIONS = {
 # ============================================================
 # INSTITUTIONAL COLOR SYSTEM
 # ============================================================
+# Muted, non-rainbow palette. Used consistently across all Plotly charts.
 
 QFA_COLORS = {
     "navy": "#0f172a",
@@ -218,11 +225,12 @@ STRATEGY_COLORS = {
 }
 
 def color_for_name(name: str, idx: int = 0) -> str:
-    return STRATEGY_COLORS.get(name, QFA_SEQUENCE[idx % len(QFA_SEQUENCY)])
+    return STRATEGY_COLORS.get(name, QFA_SEQUENCE[idx % len(QFA_SEQUENCE)])
+
 
 
 # ============================================================
-# CSS - KURUMSAL LAYOUT (KORUNDU)
+# CSS
 # ============================================================
 
 st.markdown(
@@ -330,6 +338,7 @@ st.markdown(
             padding: 10px 16px;
             font-weight: 800;
         }
+
         .compact-notes table {
             font-size: 12px !important;
             line-height: 1.25 !important;
@@ -342,23 +351,6 @@ st.markdown(
             font-size: 11px !important;
             padding: 6px !important;
             vertical-align: top !important;
-        }
-        .ranking-card {
-            background: linear-gradient(135deg, #f8fafc, #ffffff);
-            border: 1px solid #e2e8f0;
-            border-radius: 16px;
-            padding: 12px 16px;
-            margin: 8px 0;
-        }
-        .ranking-rank-1 {
-            border-left: 6px solid #c9a227;
-            background: linear-gradient(90deg, #fefce8, #ffffff);
-        }
-        .ranking-rank-2 {
-            border-left: 6px solid #94a3b8;
-        }
-        .ranking-rank-3 {
-            border-left: 6px solid #cd8b5e;
         }
     </style>
     """,
@@ -422,16 +414,8 @@ def tone_for_sharpe(x: float) -> str:
 
 def tone_for_te(x: float) -> str:
     if pd.isna(x): return "neutral"
-    if x < 0.05: return "good"
-    if x < 0.10: return "warn"
-    if x < 0.18: return "bad"
-    return "critical"
-
-
-def tone_for_beta(x: float) -> str:
-    if pd.isna(x): return "neutral"
-    if 0.8 <= x <= 1.2: return "good"
-    if 0.5 <= x < 0.8 or 1.2 < x <= 1.5: return "warn"
+    if x < 0.08: return "good"
+    if x < 0.18: return "warn"
     return "bad"
 
 
@@ -444,7 +428,7 @@ def clear_cache():
 
 
 # ============================================================
-# DATA ENGINE (PRODUCTION-GRADE - KORUNDU)
+# DATA ENGINE
 # ============================================================
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -523,8 +507,9 @@ def _extract_adjclose_from_batch(raw: pd.DataFrame, tickers: Tuple[str, ...]) ->
 
 def download_yahoo_prices(tickers: Tuple[str, ...], start: str, end: str) -> pd.DataFrame:
     """
-    Robust Yahoo-only downloader.
-    No synthetic data.
+    Robust Yahoo-only downloader:
+    batch download -> individual ticker retry -> Ticker.history retry.
+    No synthetic data is generated.
     """
     problems = []
     frames = []
@@ -557,7 +542,9 @@ def download_yahoo_prices(tickers: Tuple[str, ...], start: str, end: str) -> pd.
     if not frames:
         raise ValueError(
             "Yahoo Finance returned no usable data for selected tickers. "
-            "Use ETF Proxy mode, clear cache, or retry later. Details: " + " | ".join(problems[:8])
+            "For commodity futures, this is commonly a Yahoo/yfinance timezone/throttling issue. "
+            "Use sidebar Data Universe = 'Yahoo ETF Proxies — more stable for Streamlit Cloud', "
+            "clear cache, or retry later. Details: " + " | ".join(problems[:8])
         )
 
     px = pd.concat(frames, axis=1)
@@ -641,7 +628,7 @@ def data_quality_report(raw: pd.DataFrame, aligned: pd.DataFrame, returns: pd.Da
 
 
 # ============================================================
-# CORE METRICS (v4.14 - CORRECTED)
+# METRICS
 # ============================================================
 
 def annualized_return(r: pd.Series) -> float:
@@ -665,12 +652,10 @@ def max_drawdown(r: pd.Series) -> float:
 
 
 def historical_var(r: pd.Series, level: float) -> float:
-    """Returns negative VaR (loss magnitude as negative number)"""
     return r.dropna().quantile(1 - level)
 
 
 def historical_cvar(r: pd.Series, level: float) -> float:
-    """Returns negative CVaR (expected shortfall as negative number)"""
     x = r.dropna()
     v = x.quantile(1 - level)
     return x[x <= v].mean()
@@ -715,12 +700,6 @@ def rolling_var_cvar(r: pd.Series, window: int) -> pd.DataFrame:
     return out
 
 
-def rolling_sharpe(r: pd.Series, rf: float, window: int) -> pd.Series:
-    daily_rf = rf / TRADING_DAYS
-    excess = r - daily_rf
-    return excess.rolling(window).mean() / excess.rolling(window).std() * np.sqrt(TRADING_DAYS)
-
-
 def log_returns(prices: pd.DataFrame) -> pd.DataFrame:
     lr = np.log(prices / prices.shift(1)).replace([np.inf, -np.inf], np.nan)
     return lr.dropna(axis=0, how="any")
@@ -747,8 +726,12 @@ def bollinger_frame(series: pd.Series, window: int = 63, n_std: float = 2.0) -> 
     return out
 
 
-# ============================================================
-# QFA QUANTSTATS-STYLE METRICS ENGINE (v4.14 - FIXED)
+def rolling_sharpe(r: pd.Series, rf: float, window: int) -> pd.Series:
+    daily_rf = rf / TRADING_DAYS
+    excess = r - daily_rf
+    return excess.rolling(window).mean() / excess.rolling(window).std() * np.sqrt(TRADING_DAYS)
+    # ============================================================
+# ADVANCED PERFORMANCE RATIOS (QFA INSTITUTIONAL)
 # ============================================================
 
 def _clean_return_series(r: pd.Series) -> pd.Series:
@@ -765,157 +748,6 @@ def _clean_return_series(r: pd.Series) -> pd.Series:
     return x
 
 
-def cumulative_return(r: pd.Series) -> float:
-    x = _clean_return_series(r)
-    return (1 + x).prod() - 1 if len(x) else np.nan
-
-
-def cagr(r: pd.Series) -> float:
-    """Corrected CAGR function - was missing in previous version"""
-    x = _clean_return_series(r)
-    if len(x) < 2:
-        return np.nan
-    days = (x.index[-1] - x.index[0]).days
-    years = max(days / 365.25, len(x) / TRADING_DAYS)
-    total_return = (1 + x).prod()
-    return total_return ** (1 / years) - 1 if years > 0 else np.nan
-
-
-def downside_deviation(r: pd.Series, rf: float = 0.0) -> float:
-    x = _clean_return_series(r)
-    daily_rf = rf / TRADING_DAYS
-    downside = np.minimum(x - daily_rf, 0.0)
-    return np.sqrt(np.mean(downside ** 2)) * np.sqrt(TRADING_DAYS) if len(downside) else np.nan
-
-
-def sortino_ratio_qfa(r: pd.Series, rf: float = 0.0) -> float:
-    dd = downside_deviation(r, rf)
-    return np.nan if pd.isna(dd) or dd == 0 else (cagr(r) - rf) / dd
-
-
-def calmar_ratio_qfa(r: pd.Series) -> float:
-    mdd = abs(max_drawdown(r))
-    return np.nan if pd.isna(mdd) or mdd == 0 else cagr(r) / mdd
-
-
-def omega_ratio_qfa(r: pd.Series, threshold: float = 0.0) -> float:
-    x = _clean_return_series(r)
-    gains = (x - threshold).clip(lower=0).sum()
-    losses = (threshold - x).clip(lower=0).sum()
-    return np.nan if losses == 0 else gains / losses
-
-
-def ulcer_index_qfa(r: pd.Series) -> float:
-    x = _clean_return_series(r)
-    eq = (1 + x).cumprod()
-    dd = (eq / eq.cummax() - 1) * 100
-    return np.sqrt(np.mean(dd ** 2)) if len(dd) else np.nan
-
-
-def ulcer_performance_index_qfa(r: pd.Series, rf: float = 0.0) -> float:
-    ui = ulcer_index_qfa(r)
-    return np.nan if pd.isna(ui) or ui == 0 else (cagr(r) - rf) / (ui / 100)
-
-
-def expected_return_by_period(r: pd.Series, periods: int) -> float:
-    x = _clean_return_series(r)
-    return x.mean() * periods if len(x) else np.nan
-
-
-def win_rate_qfa(r: pd.Series) -> float:
-    x = _clean_return_series(r)
-    wins = (x > 0).sum()
-    total = (x != 0).sum()
-    return np.nan if total == 0 else wins / total
-
-
-def payoff_ratio_qfa(r: pd.Series) -> float:
-    x = _clean_return_series(r)
-    avg_win = x[x > 0].mean()
-    avg_loss = abs(x[x < 0].mean())
-    return np.nan if pd.isna(avg_win) or pd.isna(avg_loss) or avg_loss == 0 else avg_win / avg_loss
-
-
-def profit_factor_qfa(r: pd.Series) -> float:
-    x = _clean_return_series(r)
-    gross_profit = x[x > 0].sum()
-    gross_loss = abs(x[x < 0].sum())
-    return np.nan if gross_loss == 0 else gross_profit / gross_loss
-
-
-def gain_to_pain_qfa(r: pd.Series) -> float:
-    x = _clean_return_series(r)
-    total_gain = x.sum()
-    total_pain = abs(x[x < 0].sum())
-    return np.nan if total_pain == 0 else total_gain / total_pain
-
-
-def tail_ratio_qfa(r: pd.Series) -> float:
-    x = _clean_return_series(r)
-    left = abs(x.quantile(0.05))
-    right = x.quantile(0.95)
-    return np.nan if left == 0 else right / left
-
-
-def common_sense_ratio_qfa(r: pd.Series) -> float:
-    pf = profit_factor_qfa(r)
-    tr = tail_ratio_qfa(r)
-    return pf * tr if pd.notna(pf) and pd.notna(tr) else np.nan
-
-
-def kelly_criterion_qfa(r: pd.Series) -> float:
-    wr = win_rate_qfa(r)
-    pr = payoff_ratio_qfa(r)
-    return np.nan if pd.isna(wr) or pd.isna(pr) or pr == 0 else wr - (1 - wr) / pr
-
-
-def max_consecutive_count(r: pd.Series, positive: bool = True) -> int:
-    x = _clean_return_series(r)
-    cond = x > 0 if positive else x < 0
-    max_run = run = 0
-    for flag in cond:
-        if flag:
-            run += 1
-            max_run = max(max_run, run)
-        else:
-            run = 0
-    return int(max_run)
-
-
-def longest_drawdown_days_qfa(r: pd.Series) -> int:
-    x = _clean_return_series(r)
-    eq = (1 + x).cumprod()
-    underwater = eq < eq.cummax()
-    max_days = days = 0
-    for flag in underwater:
-        if flag:
-            days += 1
-            max_days = max(max_days, days)
-        else:
-            days = 0
-    return int(max_days)
-
-
-def active_return_series(p: pd.Series, b: pd.Series) -> pd.Series:
-    pp, bb = align_two(_clean_return_series(p), _clean_return_series(b), "Portfolio", "Benchmark")
-    return pp - bb
-
-
-def r_squared_qfa(p: pd.Series, b: pd.Series) -> float:
-    pp, bb = align_two(_clean_return_series(p), _clean_return_series(b), "Portfolio", "Benchmark")
-    corr = pp.corr(bb)
-    return corr ** 2 if pd.notna(corr) else np.nan
-
-
-def treynor_ratio_qfa(p: pd.Series, b: pd.Series, rf: float) -> float:
-    beta = beta_to_benchmark(p, b)
-    return np.nan if pd.isna(beta) or beta == 0 else (cagr(p) - rf) / beta
-
-
-# ============================================================
-# ADVANCED PERFORMANCE RATIOS (INSTITUTIONAL - CLEAN)
-# ============================================================
-
 def gain_loss_ratio(r: pd.Series) -> float:
     """Bernardo-Ledoit Gain-Loss Ratio"""
     x = _clean_return_series(r)
@@ -926,13 +758,16 @@ def gain_loss_ratio(r: pd.Series) -> float:
 
 def martin_ratio(r: pd.Series, rf: float = 0.0) -> float:
     """Martin Ratio = CAGR / Ulcer Index"""
-    ui = ulcer_index_qfa(r)
+    x = _clean_return_series(r)
+    eq = (1 + x).cumprod()
+    dd = (eq / eq.cummax() - 1) * 100
+    ui = np.sqrt(np.mean(dd ** 2)) if len(dd) else np.nan
     cagr_val = cagr(r)
     return np.nan if pd.isna(ui) or ui == 0 else (cagr_val - rf) / (ui / 100)
 
 
 def pain_index(r: pd.Series) -> float:
-    """Pain Index = sqrt(mean(drawdown²))"""
+    """Pain Index = sqrt(mean(drawdown²)) - alternatif Ulcer"""
     x = _clean_return_series(r)
     eq = (1 + x).cumprod()
     dd = (eq / eq.cummax() - 1) * 100
@@ -955,7 +790,10 @@ def kappa_3_ratio(r: pd.Series, threshold: float = 0.0) -> float:
 
 
 def stutzer_index(r: pd.Series, max_theta: float = 10.0, steps: int = 100) -> float:
-    """Stutzer Performance Index - penalizes large losses"""
+    """
+    Stutzer Performance Index (approximate via theta optimization)
+    Higher values indicate better risk-adjusted performance with penalty for large losses.
+    """
     x = _clean_return_series(r)
     if len(x) < 10:
         return np.nan
@@ -979,14 +817,14 @@ def stutzer_index(r: pd.Series, max_theta: float = 10.0, steps: int = 100) -> fl
 
 def cornish_fisher_var(r: pd.Series, level: float = 0.95) -> float:
     """
-    CORRECTED Cornish-Fisher VaR.
-    Returns negative number (consistent with historical_var).
+    Cornish-Fisher VaR with skewness and kurtosis adjustment.
+    More accurate for non-normal returns.
     """
     x = _clean_return_series(r)
     if len(x) < 10:
         return historical_var(r, level)
     
-    z = scipy_stats.norm.ppf(1 - level)
+    z = abs(st_stats.norm.ppf(1 - level))
     s = x.skew()
     k = x.kurtosis()
     
@@ -995,44 +833,68 @@ def cornish_fisher_var(r: pd.Series, level: float = 0.95) -> float:
     
     mu = x.mean()
     sigma = x.std()
-    
-    # Return as loss (negative for consistency)
-    return mu + sigma * z_cf
+    # Return as loss (positive number for VaR magnitude)
+    return abs(mu + sigma * z_cf)
 
 
 def cornish_fisher_cvar(r: pd.Series, level: float = 0.95) -> float:
     """
-    CORRECTED Cornish-Fisher CVaR using proper expected shortfall formula.
-    Returns negative number (consistent with historical_cvar).
+    Cornish-Fisher CVaR approximation.
     """
     x = _clean_return_series(r)
     if len(x) < 10:
-        return historical_cvar(r, level)
+        return abs(historical_cvar(r, level))
     
     var_cf = cornish_fisher_var(x, level)
-    
-    # Heuristic adjustment - use actual tail mean
-    tail_mask = x <= var_cf
-    if tail_mask.sum() < 2:
-        return var_cf * 1.1
-    
-    return x[tail_mask].mean()
+    # Simple approximation: CVaR ≈ VaR * (1 + skew adjustment)
+    s = x.skew()
+    adjustment = 1 + (s * 0.2)  # heuristic
+    return var_cf * adjustment if adjustment > 0 else var_cf
 
 
 def modified_sharpe_cf(r: pd.Series, rf: float = 0.0, level: float = 0.95) -> float:
-    """Modified Sharpe using Cornish-Fisher CVaR as risk measure"""
+    """Modified Sharpe using Cornish-Fisher VaR as risk measure"""
     cvar_cf = cornish_fisher_cvar(r, level)
     if pd.isna(cvar_cf) or cvar_cf == 0:
         return np.nan
-    return (annualized_return(r) - rf) / abs(cvar_cf * np.sqrt(TRADING_DAYS))
+    return (annualized_return(r) - rf) / (cvar_cf * np.sqrt(TRADING_DAYS))
 
 
-# ============================================================
-# BENCHMARK-RELATIVE ADVANCED METRICS
-# ============================================================
+def garch_conditional_var(
+    r: pd.Series, 
+    garch_store: Dict[str, Dict[str, Any]], 
+    ticker: str, 
+    model_key: str = "garch_t",
+    level: float = 0.95
+) -> float:
+    """
+    GARCH-based conditional VaR using the fitted volatility forecast.
+    """
+    key = f"{ticker}__{model_key}"
+    if key not in garch_store:
+        return np.nan
+    
+    g = garch_store[key]
+    cond_vol = g["Conditional Vol"].iloc[-1] / 100  # convert from % to decimal
+    
+    # Use student-t quantile if available, else normal
+    if "StudentsT" in g.get("Model", ""):
+        from scipy.stats import t as t_dist
+        # Approximate degrees of freedom from GARCH (10 is typical)
+        df = 10
+        z = t_dist.ppf(1 - level, df)
+    else:
+        z = st_stats.norm.ppf(1 - level)
+    
+    # Expected return (small, can be zero)
+    mu = r.mean()
+    return abs(mu + cond_vol * z)
+
 
 def capture_ratios(portfolio: pd.Series, benchmark: pd.Series) -> Dict[str, float]:
-    """Up/Down Capture Ratios relative to benchmark"""
+    """
+    Up/Down Capture Ratios relative to benchmark.
+    """
     p, b = align_two(portfolio, benchmark, "Portfolio", "Benchmark")
     
     up_mask = b > 0
@@ -1050,78 +912,77 @@ def capture_ratios(portfolio: pd.Series, benchmark: pd.Series) -> Dict[str, floa
 
 
 def appraisal_ratio(portfolio: pd.Series, benchmark: pd.Series, rf: float = 0.0) -> float:
-    """Appraisal Ratio: Alpha / Residual Volatility"""
+    """
+    Appraisal Ratio (Treynor-Black style): Alpha / Residual Volatility.
+    Measures active return per unit of active risk.
+    """
     p, b = align_two(portfolio, benchmark, "Portfolio", "Benchmark")
     
+    # Alpha from regression (daily)
     beta = p.cov(b) / b.var()
     alpha_daily = p.mean() - b.mean() * beta - rf / TRADING_DAYS
     
+    # Residual volatility (daily)
     residual = p - beta * b - alpha_daily
-    residual_vol_annual = residual.std() * np.sqrt(TRADING_DAYS)
+    residual_vol_daily = residual.std()
+    residual_vol_annual = residual_vol_daily * np.sqrt(TRADING_DAYS)
     
     alpha_annual = alpha_daily * TRADING_DAYS
     return alpha_annual / residual_vol_annual if residual_vol_annual != 0 else np.nan
 
 
-# ============================================================
-# KALMAN FILTER BETA
-# ============================================================
+def information_coefficient_decay(
+    signals: Dict[str, pd.DataFrame], 
+    returns: pd.DataFrame, 
+    max_lag: int = 10
+) -> pd.DataFrame:
+    """
+    IC Decay analysis: how IC changes with lag (1 to max_lag days).
+    """
+    results = []
+    for name, sig in signals.items():
+        for lag in range(1, max_lag + 1):
+            shifted_returns = returns.shift(-lag)
+            common_idx = sig.index.intersection(shifted_returns.index)
+            if len(common_idx) > 20:
+                # Manual IC calculation for this lag
+                ic_values = []
+                for dt in common_idx:
+                    s = sig.loc[dt]
+                    f = shifted_returns.loc[dt]
+                    df_ic = pd.concat([s.rename("signal"), f.rename("future")], axis=1).dropna()
+                    if len(df_ic) >= 3:
+                        ic_values.append(df_ic["signal"].corr(df_ic["future"], method="spearman"))
+                if ic_values:
+                    results.append({
+                        "Signal": name,
+                        "Lag (Days)": lag,
+                        "Mean IC": np.mean(ic_values),
+                    })
+    return pd.DataFrame(results)
 
-def kalman_beta(portfolio: pd.Series, benchmark: pd.Series, delta: float = 1e-5) -> pd.Series:
-    """Time-varying beta using Kalman filter"""
-    p, b = align_two(portfolio, benchmark, "Portfolio", "Benchmark")
-    
-    n = len(p)
-    beta_hat = np.zeros(n)
-    P = np.ones(n)
-    
-    beta_hat[0] = p.iloc[0] / b.iloc[0] if b.iloc[0] != 0 else 1.0
-    P[0] = 1.0
-    
-    for t in range(1, n):
-        beta_pred = beta_hat[t-1]
-        P_pred = P[t-1] + delta
-        
-        y = p.iloc[t]
-        x = b.iloc[t]
-        
-        if x != 0:
-            K = P_pred * x / (x * P_pred * x + 1e-6)
-            beta_hat[t] = beta_pred + K * (y - x * beta_pred)
-            P[t] = (1 - K * x) * P_pred
-        else:
-            beta_hat[t] = beta_pred
-            P[t] = P_pred
-    
-    return pd.Series(beta_hat, index=p.index, name="Kalman Beta")
-
-
-def rolling_beta_enhanced(portfolio: pd.Series, benchmark: pd.Series, window: int = 63) -> Dict[str, pd.Series]:
-    """Return both rolling beta and Kalman beta"""
-    return {
-        "Rolling Beta": rolling_beta(portfolio, benchmark, window),
-        "Kalman Beta": kalman_beta(portfolio, benchmark),
-    }
-
-
-# ============================================================
-# REGIME-CONDITIONAL METRICS
-# ============================================================
 
 def regime_conditional_metrics(
     portfolio: pd.Series, 
     benchmark: pd.Series, 
     volatility_thresholds: Tuple[float, float] = (0.10, 0.20)
 ) -> pd.DataFrame:
-    """Compute Sharpe and other metrics conditional on volatility regime"""
+    """
+    Compute Sharpe and other metrics conditional on volatility regime.
+    """
     p, b = align_two(portfolio, benchmark, "Portfolio", "Benchmark")
     
-    roll_vol = p.rolling(21).std() * np.sqrt(252)
+    # Rolling volatility (21-day)
+    roll_vol = p.rolling(21).std() * np.sqrt(TRADING_DAYS)
+    
+    low_vol_mask = roll_vol < volatility_thresholds[0]
+    mid_vol_mask = (roll_vol >= volatility_thresholds[0]) & (roll_vol < volatility_thresholds[1])
+    high_vol_mask = roll_vol >= volatility_thresholds[1]
     
     regimes = {
-        "Low Volatility (<10%)": roll_vol < volatility_thresholds[0],
-        "Moderate Volatility (10-20%)": (roll_vol >= volatility_thresholds[0]) & (roll_vol < volatility_thresholds[1]),
-        "High Volatility (>20%)": roll_vol >= volatility_thresholds[1],
+        "Low Volatility": low_vol_mask,
+        "Moderate Volatility": mid_vol_mask,
+        "High Volatility": high_vol_mask,
     }
     
     rows = []
@@ -1142,95 +1003,55 @@ def regime_conditional_metrics(
 
 
 # ============================================================
-# IC DECAY ANALYSIS
+# KALMAN FILTER BETA (ALTERNATIVE TO ROLLING BETA)
 # ============================================================
 
-def information_coefficient_decay(
-    signals: Dict[str, pd.DataFrame], 
-    returns: pd.DataFrame, 
-    max_lag: int = 10
-) -> pd.DataFrame:
-    """IC Decay analysis: how IC changes with lag"""
-    results = []
-    for name, sig in signals.items():
-        for lag in range(1, max_lag + 1):
-            shifted_returns = returns.shift(-lag)
-            common_idx = sig.index.intersection(shifted_returns.index)
-            if len(common_idx) > 20:
-                ic_values = []
-                for dt in common_idx:
-                    s = sig.loc[dt]
-                    f = shifted_returns.loc[dt]
-                    df_ic = pd.concat([s.rename("signal"), f.rename("future")], axis=1).dropna()
-                    if len(df_ic) >= 3:
-                        ic_values.append(df_ic["signal"].corr(df_ic["future"], method="spearman"))
-                if ic_values:
-                    results.append({
-                        "Signal": name,
-                        "Lag (Days)": lag,
-                        "Mean IC": np.mean(ic_values),
-                        "IC Vol": np.std(ic_values) if len(ic_values) > 1 else np.nan,
-                    })
-    return pd.DataFrame(results)
-
-
-# ============================================================
-# STRATEGY RANKING ENGINE (NEW in v4.14)
-# ============================================================
-
-def rank_strategies(metrics_df: pd.DataFrame, rf: float) -> pd.DataFrame:
+def kalman_beta(portfolio: pd.Series, benchmark: pd.Series, delta: float = 1e-5) -> pd.Series:
     """
-    Rank strategies based on multiple metrics.
-    Returns ranking table with composite score.
+    Time-varying beta using Kalman filter (state-space model).
+    Returns smoother and more adaptive beta than rolling window.
     """
-    if metrics_df.empty:
-        return pd.DataFrame()
+    p, b = align_two(portfolio, benchmark, "Portfolio", "Benchmark")
     
-    df = metrics_df.copy()
+    n = len(p)
+    beta_hat = np.zeros(n)
+    P = np.ones(n)
     
-    # Normalize each metric (higher is better for all)
-    # For drawdown and volatility, lower is better -> invert
-    metrics_to_rank = ["Sharpe", "Sortino Ratio", "Calmar Ratio", "Gain-Loss Ratio", "Information Ratio"]
+    # Initial state
+    beta_hat[0] = p.iloc[0] / b.iloc[0] if b.iloc[0] != 0 else 1.0
+    P[0] = 1.0
     
-    ranking_df = pd.DataFrame()
-    ranking_df["Strategy"] = df["Strategy / Instrument"]
+    for t in range(1, n):
+        # Prediction
+        beta_pred = beta_hat[t-1]
+        P_pred = P[t-1] + delta
+        
+        # Update
+        y = p.iloc[t]
+        x = b.iloc[t]
+        
+        if x != 0:
+            K = P_pred * x / (x * P_pred * x + 1e-6)
+            beta_hat[t] = beta_pred + K * (y - x * beta_pred)
+            P[t] = (1 - K * x) * P_pred
+        else:
+            beta_hat[t] = beta_pred
+            P[t] = P_pred
     
-    composite_score = 0
-    
-    for metric in metrics_to_rank:
-        if metric in df.columns:
-            # Get values, replace NaN with 0
-            values = df[metric].fillna(0).values
-            # Normalize to 0-1 range
-            if values.max() > values.min():
-                normalized = (values - values.min()) / (values.max() - values.min() + 1e-10)
-            else:
-                normalized = np.ones_like(values) * 0.5
-            ranking_df[f"{metric}_Score"] = normalized
-            composite_score += normalized
-    
-    # Add inverse metrics (lower is better)
-    inverse_metrics = ["Max Drawdown", "Annual Volatility"]
-    for metric in inverse_metrics:
-        if metric in df.columns:
-            values = -df[metric].fillna(0).values  # Negate so lower drawdown gives higher score
-            if values.max() > values.min():
-                normalized = (values - values.min()) / (values.max() - values.min() + 1e-10)
-            else:
-                normalized = np.ones_like(values) * 0.5
-            ranking_df[f"{metric}_Score"] = normalized
-            composite_score += normalized
-    
-    ranking_df["Composite Score"] = composite_score / (len(metrics_to_rank) + len(inverse_metrics))
-    ranking_df["Rank"] = ranking_df["Composite Score"].rank(ascending=False).astype(int)
-    ranking_df = ranking_df.sort_values("Rank")
-    
-    return ranking_df[["Rank", "Strategy", "Composite Score"] + [f"{m}_Score" for m in metrics_to_rank[:3]]]
+    return pd.Series(beta_hat, index=p.index, name="Kalman Beta")
 
 
-# ============================================================
-# METRICS FOR RETURNS (COMPREHENSIVE - v4.14)
-# ============================================================
+def rolling_beta_enhanced(portfolio: pd.Series, benchmark: pd.Series, window: int = 63) -> Dict[str, pd.Series]:
+    """
+    Return both traditional rolling beta and Kalman filter beta for comparison.
+    """
+    rolling = rolling_beta(portfolio, benchmark, window)
+    kalman = kalman_beta(portfolio, benchmark)
+    return {
+        "Rolling Beta": rolling,
+        "Kalman Beta": kalman,
+    }
+
 
 def metrics_for_returns(return_map: Dict[str, pd.Series], benchmark: pd.Series, rf: float) -> pd.DataFrame:
     rows = []
@@ -1241,9 +1062,6 @@ def metrics_for_returns(return_map: Dict[str, pd.Series], benchmark: pd.Series, 
             "Annual Return": annualized_return(p),
             "Annual Volatility": annualized_volatility(p),
             "Sharpe": sharpe_ratio(p, rf),
-            "Sortino Ratio": sortino_ratio_qfa(p, rf),
-            "Calmar Ratio": calmar_ratio_qfa(p),
-            "Omega Ratio": omega_ratio_qfa(p),
             "Max Drawdown": max_drawdown(p),
             "VaR 95% Daily": historical_var(p, 0.95),
             "CVaR 95% Daily": historical_cvar(p, 0.95),
@@ -1252,21 +1070,18 @@ def metrics_for_returns(return_map: Dict[str, pd.Series], benchmark: pd.Series, 
             "Tracking Error vs Benchmark": tracking_error(p, b),
             "Beta vs Benchmark": beta_to_benchmark(p, b),
             "Information Ratio": information_ratio(p, b),
-            "R-Squared": r_squared_qfa(p, b),
-            "Treynor Ratio": treynor_ratio_qfa(p, b, rf),
             "Skew": p.skew(),
             "Kurtosis": p.kurtosis(),
-            "Win Rate": win_rate_qfa(p),
-            "Profit Factor": profit_factor_qfa(p),
+            # NEW ADVANCED RATIOS
             "Gain-Loss Ratio": gain_loss_ratio(p),
             "Martin Ratio": martin_ratio(p, rf),
             "Pain Index": pain_index(p),
             "Pain Ratio": pain_ratio(p, rf),
-            "Kappa 3": kappa_3_ratio(p),
+            "Kappa 3": kappa_3_ratio(p, 0),
             "Stutzer Index": stutzer_index(p),
             "Cornish-Fisher VaR 95%": cornish_fisher_var(p, 0.95),
             "Cornish-Fisher CVaR 95%": cornish_fisher_cvar(p, 0.95),
-            "Modified Sharpe (CF)": modified_sharpe_cf(p, rf, 0.95),
+            "Modified Sharpe (CF-VaR)": modified_sharpe_cf(p, rf, 0.95),
             "Up Capture Ratio": capture_ratios(p, b).get("Up Capture Ratio", np.nan),
             "Down Capture Ratio": capture_ratios(p, b).get("Down Capture Ratio", np.nan),
             "Appraisal Ratio": appraisal_ratio(p, b, rf),
@@ -1274,8 +1089,197 @@ def metrics_for_returns(return_map: Dict[str, pd.Series], benchmark: pd.Series, 
     return pd.DataFrame(rows)
 
 
+def interpret_strategy_table(metrics: pd.DataFrame) -> pd.DataFrame:
+    def beta_text(x):
+        if pd.isna(x): return "N/A"
+        if x > 1.2: return "High equity sensitivity"
+        if x > 0.8: return "Market-like beta"
+        if x > 0.3: return "Moderate equity sensitivity"
+        if x > -0.3: return "Low equity sensitivity"
+        return "Negative beta"
+
+    def te_text(x):
+        if pd.isna(x): return "N/A"
+        if x < 0.05: return "Low active risk"
+        if x < 0.10: return "Moderate active risk"
+        if x < 0.20: return "High active risk"
+        return "Very high active risk"
+
+    def dd_text(x):
+        if pd.isna(x): return "N/A"
+        if x > -0.10: return "Contained drawdown"
+        if x > -0.25: return "Moderate drawdown"
+        if x > -0.40: return "High drawdown"
+        return "Severe drawdown"
+
+    rows = []
+    for _, r in metrics.iterrows():
+        rows.append({
+            "Strategy": r["Strategy / Instrument"],
+            "Plain-English Read": (
+                f"{dd_text(r['Max Drawdown'])}; {te_text(r['Tracking Error vs Benchmark'])}; "
+                f"{beta_text(r['Beta vs Benchmark'])}; Sharpe {r['Sharpe']:.2f}."
+            ),
+            "Risk Snapshot": (
+                f"VaR95 {r['VaR 95% Daily']:.2%}, CVaR95 {r['CVaR 95% Daily']:.2%}, "
+                f"Vol {r['Annual Volatility']:.2%}."
+            ),
+        })
+    return pd.DataFrame(rows)
+
+
+def metric_dictionary() -> pd.DataFrame:
+    return pd.DataFrame([
+        {"Metric": "Annual Return", "Meaning": "Compounded yearly return.", "How to read": "Higher is better only if risk is acceptable."},
+        {"Metric": "Annual Volatility", "Meaning": "Annualized fluctuation.", "How to read": "Higher means rougher return path."},
+        {"Metric": "Sharpe", "Meaning": "Return per unit of risk after RF.", "How to read": "Above 1 strong; below 0 weak."},
+        {"Metric": "Max Drawdown", "Meaning": "Worst peak-to-trough loss.", "How to read": "Capital pain measure."},
+        {"Metric": "VaR", "Meaning": "Loss threshold at a confidence level.", "How to read": "VaR 95% is exceeded in worst 5% of days."},
+        {"Metric": "CVaR", "Meaning": "Average loss beyond VaR.", "How to read": "More conservative tail-loss measure."},
+        {"Metric": "Tracking Error", "Meaning": "Annualized active risk vs benchmark.", "How to read": "Low means benchmark-like; high means active/different."},
+        {"Metric": "Rolling Beta", "Meaning": "Time-varying benchmark sensitivity.", "How to read": "1 is equity-like; 0 is low market sensitivity."},
+        {"Metric": "Information Ratio", "Meaning": "Active return per unit TE.", "How to read": "Higher is better versus benchmark."},
+        {"Metric": "Gain-Loss Ratio", "Meaning": "Bernardo-Ledoit ratio of avg gain to avg loss.", "How to read": ">1.5 indicates favorable asymmetry."},
+        {"Metric": "Martin Ratio", "Meaning": "CAGR / Ulcer Index (drawdown penalty).", "How to read": "Higher is better; penalizes drawdown severity."},
+        {"Metric": "Pain Index", "Meaning": "sqrt(mean(drawdown²)) - drawdown severity.", "How to read": "Lower is better for capital preservation."},
+        {"Metric": "Kappa 3", "Meaning": "Third-order lower partial moment ratio.", "How to read": "Higher is better; focuses on large losses."},
+        {"Metric": "Stutzer Index", "Meaning": "Performance with penalty for catastrophic losses.", "How to read": "Higher = better large-loss avoidance."},
+        {"Metric": "Cornish-Fisher VaR", "Meaning": "VaR with skewness/kurtosis adjustment.", "How to read": "Compare with historical VaR; difference indicates non-normality."},
+        {"Metric": "Capture Ratios", "Meaning": "Up/Down market participation relative to benchmark.", "How to read": "Up > 100% and Down < 100% is ideal."},
+        {"Metric": "Appraisal Ratio", "Meaning": "Alpha per unit of residual risk.", "How to read": "Higher indicates better active management efficiency."},
+    ])
+
+
+def portfolio_strategy_notes_table() -> pd.DataFrame:
+    return pd.DataFrame([
+        {
+            "Strategy": "Equal Weight",
+            "Core Idea": "Neutral reference portfolio. Every selected instrument receives identical capital weight.",
+            "Weight Logic": "1/N allocation. No return forecast, no volatility forecast, no optimization.",
+            "Why It Matters": "This is the governance benchmark. If a complex model cannot beat it after risk and drawdown, the model is not justified.",
+            "Strength": "Transparent, robust, low model risk.",
+            "Weakness": "Ignores volatility, correlation and regime change.",
+            "User Question Answered": "What happens if we avoid all model assumptions?",
+            "Governance Note": "Use as baseline for alpha, risk and drawdown comparison.",
+        },
+        {
+            "Strategy": "User Custom Weights",
+            "Core Idea": "Investment committee or portfolio manager view translated into allocation.",
+            "Weight Logic": "Sidebar inputs are normalized to 100%.",
+            "Why It Matters": "Allows policy-driven or discretionary exposure to be tested against systematic alternatives.",
+            "Strength": "Reflects real decision maker views and constraints.",
+            "Weakness": "Can hide concentration risk if not governed by caps and risk budgets.",
+            "User Question Answered": "What is the risk/return profile of our preferred allocation?",
+            "Governance Note": "Always compare against Equal Weight and Min Volatility.",
+        },
+        {
+            "Strategy": "Inverse Volatility",
+            "Core Idea": "Defensive risk-aware portfolio; gives more weight to lower-volatility instruments.",
+            "Weight Logic": "Weight is proportional to 1 / historical volatility.",
+            "Why It Matters": "A practical risk-budget proxy when expected returns are uncertain.",
+            "Strength": "Reduces dominance of high-volatility instruments.",
+            "Weakness": "May overweight low-volatility assets with poor expected return.",
+            "User Question Answered": "Can we reduce volatility without complex optimization?",
+            "Governance Note": "Useful during unstable regimes and as a conservative benchmark.",
+        },
+        {
+            "Strategy": "Max Sharpe",
+            "Core Idea": "Optimization candidate targeting best expected excess return per unit of volatility.",
+            "Weight Logic": "PyPortfolioOpt uses expected returns and Ledoit-Wolf covariance under max-weight cap.",
+            "Why It Matters": "Converts return and risk forecasts into a disciplined portfolio candidate.",
+            "Strength": "Explicitly targets risk-adjusted performance.",
+            "Weakness": "Sensitive to expected return estimation error.",
+            "User Question Answered": "Which allocation is most efficient under our assumptions?",
+            "Governance Note": "Never approve blindly; validate with TE, drawdown, VaR/CVaR and robustness checks.",
+        },
+        {
+            "Strategy": "Min Volatility",
+            "Core Idea": "Defensive optimized portfolio designed to minimize expected volatility.",
+            "Weight Logic": "PyPortfolioOpt minimizes covariance-based portfolio variance under constraints.",
+            "Why It Matters": "Provides a capital-preservation candidate.",
+            "Strength": "Usually has lower volatility and drawdown.",
+            "Weakness": "May sacrifice upside and concentrate in low-vol assets.",
+            "User Question Answered": "What is the lowest-risk allocation in this universe?",
+            "Governance Note": "Compare against Inverse Volatility to detect optimizer instability.",
+        },
+    ])
+
+
+def alpha_generation_methods_table() -> pd.DataFrame:
+    return pd.DataFrame([
+        {
+            "Alpha Pillar": "Momentum / Trend",
+            "Quant Technique": "Time-series momentum, cross-sectional momentum, moving-average breakouts, 3/6/12-month lookback signals.",
+            "Signal Definition": "Rank instruments by past return or trend strength; favor persistent winners and penalize losers.",
+            "Validation Metric": "Information Coefficient, hit ratio, turnover, post-cost alpha.",
+            "Risk Control": "Volatility scaling, drawdown stop, sector/asset cap, TE budget.",
+            "Board-Level Explanation": "We test whether price persistence exists and whether it survives transaction costs and risk controls.",
+        },
+        {
+            "Alpha Pillar": "Mean Reversion / Relative Value",
+            "Quant Technique": "Z-score spreads, Bollinger bands on log-return differences, cointegration-style spread monitoring.",
+            "Signal Definition": "When relative return spread is unusually stretched, expect partial normalization.",
+            "Validation Metric": "Spread half-life, z-score reversal rate, profit factor, drawdown during trend regimes.",
+            "Risk Control": "Stop-loss by z-score expansion, regime filter, volatility cap.",
+            "Board-Level Explanation": "We exploit temporary dislocations, but only when the spread historically reverts.",
+        },
+        {
+            "Alpha Pillar": "Carry / Roll Yield Proxy",
+            "Quant Technique": "Futures curve proxy, ETF roll-cost diagnostics, commodity carry indicators where data is available.",
+            "Signal Definition": "Prefer assets with favorable carry/roll profile; avoid persistent negative roll drag.",
+            "Validation Metric": "Carry contribution, return decomposition, rolling alpha after volatility adjustment.",
+            "Risk Control": "Commodity-specific caps and liquidity screen.",
+            "Board-Level Explanation": "Commodity returns are not only spot moves; roll/carry can dominate long-run ETF outcomes.",
+        },
+        {
+            "Alpha Pillar": "Volatility Risk Premia",
+            "Quant Technique": "GARCH volatility forecasts, realized-volatility regimes, volatility breakout filters.",
+            "Signal Definition": "Reduce exposure when forecast volatility rises; increase risk only when compensated.",
+            "Validation Metric": "Vol forecast error, drawdown reduction, Sharpe improvement, VaR breach frequency.",
+            "Risk Control": "GARCH forecast volatility cap, CVaR budget, dynamic de-risking.",
+            "Board-Level Explanation": "Alpha is protected by avoiding uncompensated volatility spikes.",
+        },
+        {
+            "Alpha Pillar": "Factor / Macro Exposure",
+            "Quant Technique": "Regression beta to USD, rates, equities, inflation proxies, PCA factor extraction.",
+            "Signal Definition": "Identify whether returns are driven by macro regimes rather than asset-specific alpha.",
+            "Validation Metric": "Alpha after factor adjustment, residual IC, factor attribution.",
+            "Risk Control": "Factor exposure limits and residual-risk monitoring.",
+            "Board-Level Explanation": "We separate true manager skill from hidden macro bets.",
+        },
+        {
+            "Alpha Pillar": "Black-Litterman Views",
+            "Quant Technique": "Bayesian blending of equilibrium returns with explicit active views and confidence levels.",
+            "Signal Definition": "Convert investment views into posterior expected returns and optimized weights.",
+            "Validation Metric": "View hit rate, posterior vs prior attribution, active risk efficiency.",
+            "Risk Control": "Confidence slider, max weight, TE budget, stress testing.",
+            "Board-Level Explanation": "Views are not hard-coded; confidence controls how strongly they affect the portfolio.",
+        },
+        {
+            "Alpha Pillar": "Machine Learning Ranking",
+            "Quant Technique": "Regularized regression, tree models, walk-forward validation, feature importance and SHAP-style diagnostics.",
+            "Signal Definition": "Predict next-period relative return or risk-adjusted score from lagged features.",
+            "Validation Metric": "Out-of-sample IC, rank IC, turnover, degradation analysis.",
+            "Risk Control": "Purged walk-forward testing, feature stability, model governance.",
+            "Board-Level Explanation": "ML is only accepted if it improves out-of-sample ranking after costs and risk limits.",
+        },
+    ])
+
+
+def alpha_research_pipeline_table() -> pd.DataFrame:
+    return pd.DataFrame([
+        {"Step": "1. Hypothesis", "Question": "Why should this signal work?", "Output": "Documented economic rationale."},
+        {"Step": "2. Signal Construction", "Question": "How exactly is alpha measured?", "Output": "Formula, lookback, rebalance rule."},
+        {"Step": "3. Validation", "Question": "Does it predict future returns?", "Output": "IC, rank IC, hit ratio, t-stat, decay curve."},
+        {"Step": "4. Cost & Turnover", "Question": "Does alpha survive implementation?", "Output": "Net alpha after transaction and slippage assumptions."},
+        {"Step": "5. Risk Model", "Question": "Is it alpha or hidden beta?", "Output": "Factor-adjusted alpha and residual risk."},
+        {"Step": "6. Portfolio Construction", "Question": "How does signal become weights?", "Output": "Constraints, TE budget, max weight, CVaR budget."},
+        {"Step": "7. Monitoring", "Question": "When do we stop trusting it?", "Output": "Live IC monitoring, drawdown triggers, regime diagnostics."},
+    ])
+
+
 # ============================================================
-# STRATEGY IMPLEMENTATIONS
+# STRATEGIES
 # ============================================================
 
 def equal_weight(returns: pd.DataFrame) -> Tuple[pd.Series, Dict[str, float]]:
@@ -1310,14 +1314,17 @@ def optimize_strategies(prices: pd.DataFrame, returns: pd.DataFrame, rf: float, 
     if not _pkg_available("sklearn"):
         return strategy_returns, weights, pd.DataFrame([{
             "Strategy": "PyPortfolioOpt",
-            "Error": "scikit-learn is missing"
+            "Error": "scikit-learn is missing. Add scikit-learn to requirements.txt for Ledoit-Wolf covariance."
         }])
 
     try:
         mu = expected_returns.mean_historical_return(prices, frequency=TRADING_DAYS)
         S = risk_models.CovarianceShrinkage(prices, frequency=TRADING_DAYS).ledoit_wolf()
     except Exception as exc:
-        return strategy_returns, weights, pd.DataFrame([{"Strategy": "PyPortfolioOpt", "Error": f"Preparation failed: {exc}"}])
+        return strategy_returns, weights, pd.DataFrame([{
+            "Strategy": "PyPortfolioOpt",
+            "Error": f"Covariance/expected-return preparation failed: {exc}"
+        }])
 
     try:
         ef = EfficientFrontier(mu, S, weight_bounds=(0, max_weight))
@@ -1380,8 +1387,9 @@ def build_strategy_set(
     return strategy_returns, strategy_weights, wdf, opt_perf
 
 
+
 # ============================================================
-# ALPHA ENGINE
+# ALPHA ENGINE — LIVE SIGNALS, IC, ALPHA WEIGHTS
 # ============================================================
 
 def zscore_frame(df: pd.DataFrame, window: int) -> pd.DataFrame:
@@ -1391,6 +1399,9 @@ def zscore_frame(df: pd.DataFrame, window: int) -> pd.DataFrame:
 
 
 def cross_sectional_rank_score(df: pd.DataFrame, higher_is_better: bool = True) -> pd.DataFrame:
+    """
+    Converts each date's cross-section into [-1, +1] rank score.
+    """
     ranks = df.rank(axis=1, pct=True, ascending=not higher_is_better)
     return (ranks - 0.5) * 2.0
 
@@ -1403,6 +1414,13 @@ def build_alpha_signals(
     meanrev_window: int = 63,
     vol_window: int = 63,
 ) -> Dict[str, pd.DataFrame]:
+    """
+    Produces transparent alpha signal families:
+    - Momentum: cross-sectional rank of trailing returns
+    - Mean Reversion: negative z-score of price deviation
+    - Volatility Quality: lower realized vol receives higher score
+    - Composite: average of available normalized scores
+    """
     px = prices.reindex(returns.index).dropna(how="any")
     r = returns.reindex(px.index).dropna(how="any")
 
@@ -1431,10 +1449,16 @@ def build_alpha_signals(
 
 
 def forward_returns(returns: pd.DataFrame, horizon: int) -> pd.DataFrame:
+    """
+    Approximate forward compounded returns from daily returns.
+    """
     return (1 + returns).rolling(horizon).apply(lambda x: np.prod(x) - 1, raw=False).shift(-horizon)
 
 
 def information_coefficient(signal: pd.DataFrame, returns: pd.DataFrame, horizon: int = 21, method: str = "spearman") -> pd.Series:
+    """
+    Cross-sectional IC: date-by-date correlation between today's signal and future returns.
+    """
     fwd = forward_returns(returns.reindex(signal.index), horizon)
     common_idx = signal.index.intersection(fwd.index)
     out = {}
@@ -1465,7 +1489,15 @@ def ic_summary_table(signals: Dict[str, pd.DataFrame], returns: pd.DataFrame, ho
     return pd.DataFrame(rows)
 
 
-def alpha_weights_from_signal(signal: pd.DataFrame, max_weight: float = 0.45, long_only: bool = True) -> pd.DataFrame:
+def alpha_weights_from_signal(
+    signal: pd.DataFrame,
+    max_weight: float = 0.45,
+    long_only: bool = True,
+) -> pd.DataFrame:
+    """
+    Converts alpha scores into portfolio weights.
+    Long-only mode clips negative scores to zero.
+    """
     sig = signal.copy().replace([np.inf, -np.inf], np.nan).fillna(0.0)
 
     if long_only:
@@ -1485,6 +1517,9 @@ def alpha_weights_from_signal(signal: pd.DataFrame, max_weight: float = 0.45, lo
 
 
 def portfolio_returns_from_dynamic_weights(returns: pd.DataFrame, weights: pd.DataFrame, rebalance_lag: int = 1) -> pd.Series:
+    """
+    Uses signal weights with a lag to avoid look-ahead bias.
+    """
     w = weights.shift(rebalance_lag).reindex(returns.index).ffill().dropna(how="all")
     r = returns.reindex(w.index).dropna(how="any")
     w = w.reindex(r.index).fillna(0.0)
@@ -1570,7 +1605,7 @@ def build_alpha_engine(
 
 
 # ============================================================
-# GARCH VOLATILITY LAB
+# GARCH
 # ============================================================
 
 @dataclass
@@ -1706,7 +1741,7 @@ def run_garch_suite(returns: pd.DataFrame, model_keys: Tuple[str, ...]) -> Tuple
 
 
 # ============================================================
-# CHART FUNCTIONS
+# CHARTS
 # ============================================================
 
 def layout(fig: go.Figure, title: str, height: int = 650) -> go.Figure:
@@ -1811,11 +1846,26 @@ def fig_performance_bars(metrics: pd.DataFrame) -> go.Figure:
     fig.add_trace(go.Bar(x=x, y=df["Annual Volatility"], name="Annual Volatility", marker_color=QFA_COLORS["steel"]), row=1, col=2)
     fig.add_trace(go.Bar(x=x, y=df["Sharpe"], name="Sharpe", marker_color=QFA_COLORS["muted_gold"]), row=2, col=1)
     fig.add_trace(go.Bar(x=x, y=df["Max Drawdown"], name="Max Drawdown", marker_color=QFA_COLORS["risk_red"]), row=2, col=2)
-    fig.add_hline(y=0, line_dash="dash", row=2, col=2)
     fig.update_yaxes(tickformat=".0%", row=1, col=1)
     fig.update_yaxes(tickformat=".0%", row=1, col=2)
     fig.update_yaxes(tickformat=".0%", row=2, col=2)
     return layout(fig, "Performance Metrics Dashboard", 820)
+
+
+def fig_te_beta(strategy_returns: Dict[str, pd.Series], benchmark: pd.Series, selected: List[str], window: int, te_target: float, te_band: float) -> go.Figure:
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, subplot_titles=["Rolling Tracking Error", "Rolling Beta"])
+    for name in selected:
+        if name in strategy_returns:
+            te = rolling_tracking_error(strategy_returns[name], benchmark, window)
+            beta = rolling_beta(strategy_returns[name], benchmark, window)
+            fig.add_trace(go.Scatter(x=te.index, y=te.values, mode="lines", name=f"{name} TE", line=dict(color=color_for_name(name, selected.index(name) if name in selected else 0), width=2.2)), row=1, col=1)
+            fig.add_trace(go.Scatter(x=beta.index, y=beta.values, mode="lines", name=f"{name} Beta", line=dict(color=color_for_name(name, selected.index(name) if name in selected else 0), width=2.2)), row=2, col=1)
+    fig.add_hline(y=te_target, line_dash="dash", annotation_text="TE Target", row=1, col=1)
+    fig.add_hline(y=te_target + te_band, line_dash="dot", annotation_text="Upper Band", row=1, col=1)
+    fig.add_hline(y=max(te_target - te_band, 0), line_dash="dot", annotation_text="Lower Band", row=1, col=1)
+    fig.add_hline(y=1.0, line_dash="dash", annotation_text="Beta = 1", row=2, col=1)
+    fig.update_yaxes(tickformat=".0%", row=1, col=1)
+    return layout(fig, "Rolling Tracking Error and Rolling Beta", 820)
 
 
 def fig_te_beta_map(metrics: pd.DataFrame) -> go.Figure:
@@ -1831,9 +1881,6 @@ def fig_te_beta_map(metrics: pd.DataFrame) -> go.Figure:
         color_discrete_sequence=QFA_SEQUENCE,
     )
     fig.update_xaxes(tickformat=".0%")
-    fig.add_vline(x=0.05, line_dash="dash", line_color="green", annotation_text="Low TE")
-    fig.add_vline(x=0.10, line_dash="dash", line_color="orange", annotation_text="Moderate TE")
-    fig.add_vline(x=0.18, line_dash="dash", line_color="red", annotation_text="High TE")
     return layout(fig, "Benchmark-Relative Map — Tracking Error vs Beta", 680)
 
 
@@ -1910,7 +1957,6 @@ def fig_rolling_sharpe(strategy_returns: Dict[str, pd.Series], selected: List[st
             rs = rolling_sharpe(strategy_returns[name], rf, window)
             fig.add_trace(go.Scatter(x=rs.index, y=rs.values, mode="lines", name=name, line=dict(color=color_for_name(name, i), width=2.0)))
     fig.add_hline(y=0, line_dash="dash", annotation_text="Sharpe = 0")
-    fig.add_hline(y=1, line_dash="dot", line_color="green", annotation_text="Target Sharpe")
     fig.update_yaxes(title="Rolling Sharpe")
     return layout(fig, f"{window}-Day Rolling Sharpe by Strategy", 720)
 
@@ -1923,7 +1969,7 @@ def fig_underwater_recovery(strategy_returns: Dict[str, pd.Series], selected: Li
         r = strategy_returns[name].dropna()
         eq = (1 + r).cumprod()
         dd = eq / eq.cummax() - 1
-        fig.add_trace(go.Scatter(x=dd.index, y=dd.values, mode="lines", name=name, line=dict(color=color_for_name(name, i), width=2.0), fill="tozeroy"))
+        fig.add_trace(go.Scatter(x=dd.index, y=dd.values, mode="lines", name=name, line=dict(color=color_for_name(name, i), width=2.0)))
     fig.update_yaxes(title="Underwater Drawdown", tickformat=".0%")
     return layout(fig, "Underwater Chart — Strategy Recovery Profile", 720)
 
@@ -1997,7 +2043,6 @@ def fig_alpha_turnover(turnover: pd.Series) -> go.Figure:
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=turnover.index, y=turnover.values, mode="lines", name="Daily Turnover", line=dict(color=QFA_COLORS["slate"], width=1.8)))
     fig.add_trace(go.Scatter(x=turnover.index, y=turnover.rolling(21).mean(), mode="lines", name="21D Avg Turnover", line=dict(color=QFA_COLORS["muted_gold"], width=2.4)))
-    fig.add_hline(y=0.5, line_dash="dash", annotation_text="High Turnover Threshold")
     fig.update_yaxes(title="Turnover")
     return layout(fig, "Alpha Portfolio Turnover", 650)
 
@@ -2035,11 +2080,153 @@ def fig_garch_resid(ticker: str, model_key: str, store: Dict[str, Dict[str, Any]
     fig.add_trace(go.Scatter(x=resid.index, y=resid.values, mode="lines", name="Std Resid"), row=2, col=1)
     fig.add_trace(go.Scatter(x=resid.index, y=(resid**2).values, mode="lines", name="Sq Resid"), row=2, col=2)
     return layout(fig, f"{COMMODITY_UNIVERSE.get(ticker, {}).get('display', ticker)} — GARCH Diagnostics", 850)
+    # ============================================================
+# QFA QUANTSTATS-STYLE METRICS ENGINE
+# ============================================================
+
+def cumulative_return(r: pd.Series) -> float:
+    x = _clean_return_series(r)
+    return (1 + x).prod() - 1 if len(x) else np.nan
 
 
-# ============================================================
-# QFA QUANTSTATS-STYLE TEARSHEET (v4.14)
-# ============================================================
+def cagr(r: pd.Series) -> float:
+    x = _clean_return_series(r)
+    if len(x) < 2:
+        return np.nan
+    years = max((x.index[-1] - x.index[0]).days / 365.25, len(x) / TRADING_DAYS)
+    return (1 + x).prod() ** (1 / years) - 1 if years > 0 else np.nan
+
+
+def downside_deviation(r: pd.Series, rf: float = 0.0) -> float:
+    x = _clean_return_series(r)
+    daily_rf = rf / TRADING_DAYS
+    downside = np.minimum(x - daily_rf, 0.0)
+    return np.sqrt(np.mean(downside ** 2)) * np.sqrt(TRADING_DAYS) if len(downside) else np.nan
+
+
+def sortino_ratio_qfa(r: pd.Series, rf: float = 0.0) -> float:
+    dd = downside_deviation(r, rf)
+    return np.nan if pd.isna(dd) or dd == 0 else (cagr(r) - rf) / dd
+
+
+def calmar_ratio_qfa(r: pd.Series) -> float:
+    mdd = abs(max_drawdown(r))
+    return np.nan if pd.isna(mdd) or mdd == 0 else cagr(r) / mdd
+
+
+def omega_ratio_qfa(r: pd.Series, threshold: float = 0.0) -> float:
+    x = _clean_return_series(r)
+    gains = (x - threshold).clip(lower=0).sum()
+    losses = (threshold - x).clip(lower=0).sum()
+    return np.nan if losses == 0 else gains / losses
+
+
+def ulcer_index_qfa(r: pd.Series) -> float:
+    x = _clean_return_series(r)
+    eq = (1 + x).cumprod()
+    dd = (eq / eq.cummax() - 1) * 100
+    return np.sqrt(np.mean(dd ** 2)) if len(dd) else np.nan
+
+
+def ulcer_performance_index_qfa(r: pd.Series, rf: float = 0.0) -> float:
+    ui = ulcer_index_qfa(r)
+    return np.nan if pd.isna(ui) or ui == 0 else (cagr(r) - rf) / (ui / 100)
+
+
+def expected_return_by_period(r: pd.Series, periods: int) -> float:
+    x = _clean_return_series(r)
+    return x.mean() * periods if len(x) else np.nan
+
+
+def win_rate_qfa(r: pd.Series) -> float:
+    x = _clean_return_series(r)
+    wins = (x > 0).sum()
+    total = (x != 0).sum()
+    return np.nan if total == 0 else wins / total
+
+
+def payoff_ratio_qfa(r: pd.Series) -> float:
+    x = _clean_return_series(r)
+    avg_win = x[x > 0].mean()
+    avg_loss = abs(x[x < 0].mean())
+    return np.nan if pd.isna(avg_win) or pd.isna(avg_loss) or avg_loss == 0 else avg_win / avg_loss
+
+
+def profit_factor_qfa(r: pd.Series) -> float:
+    x = _clean_return_series(r)
+    gross_profit = x[x > 0].sum()
+    gross_loss = abs(x[x < 0].sum())
+    return np.nan if gross_loss == 0 else gross_profit / gross_loss
+
+
+def gain_to_pain_qfa(r: pd.Series) -> float:
+    x = _clean_return_series(r)
+    total_gain = x.sum()
+    total_pain = abs(x[x < 0].sum())
+    return np.nan if total_pain == 0 else total_gain / total_pain
+
+
+def tail_ratio_qfa(r: pd.Series) -> float:
+    x = _clean_return_series(r)
+    left = abs(x.quantile(0.05))
+    right = x.quantile(0.95)
+    return np.nan if left == 0 else right / left
+
+
+def common_sense_ratio_qfa(r: pd.Series) -> float:
+    pf = profit_factor_qfa(r)
+    tr = tail_ratio_qfa(r)
+    return pf * tr if pd.notna(pf) and pd.notna(tr) else np.nan
+
+
+def kelly_criterion_qfa(r: pd.Series) -> float:
+    wr = win_rate_qfa(r)
+    pr = payoff_ratio_qfa(r)
+    return np.nan if pd.isna(wr) or pd.isna(pr) or pr == 0 else wr - (1 - wr) / pr
+
+
+def max_consecutive_count(r: pd.Series, positive: bool = True) -> int:
+    x = _clean_return_series(r)
+    cond = x > 0 if positive else x < 0
+    max_run = run = 0
+    for flag in cond:
+        if flag:
+            run += 1
+            max_run = max(max_run, run)
+        else:
+            run = 0
+    return int(max_run)
+
+
+def longest_drawdown_days_qfa(r: pd.Series) -> int:
+    x = _clean_return_series(r)
+    eq = (1 + x).cumprod()
+    underwater = eq < eq.cummax()
+    max_days = days = 0
+    for flag in underwater:
+        if flag:
+            days += 1
+            max_days = max(max_days, days)
+        else:
+            days = 0
+    return int(max_days)
+
+
+def active_return_series(p: pd.Series, b: pd.Series) -> pd.Series:
+    pp, bb = align_two(_clean_return_series(p), _clean_return_series(b), "Portfolio", "Benchmark")
+    return pp - bb
+
+
+def r_squared_qfa(p: pd.Series, b: pd.Series) -> float:
+    pp, bb = align_two(_clean_return_series(p), _clean_return_series(b), "Portfolio", "Benchmark")
+    corr = pp.corr(bb)
+    return corr ** 2 if pd.notna(corr) else np.nan
+
+
+def treynor_ratio_qfa(p: pd.Series, b: pd.Series, rf: float) -> float:
+    beta = beta_to_benchmark(p, b)
+    return np.nan if pd.isna(beta) or beta == 0 else (cagr(p) - rf) / beta
+
 
 def qfa_quantstats_style_metrics(strategy_name: str, r: pd.Series, benchmark: pd.Series, rf: float) -> pd.DataFrame:
     p, b = align_two(_clean_return_series(r), _clean_return_series(benchmark), "Strategy", "Benchmark")
@@ -2061,24 +2248,24 @@ def qfa_quantstats_style_metrics(strategy_name: str, r: pd.Series, benchmark: pd
         ("Beta", beta_to_benchmark(p, b), 1.0, "num"),
         ("Treynor Ratio", treynor_ratio_qfa(p, b, rf), treynor_ratio_qfa(b, b, rf), "num"),
         ("Information Ratio", information_ratio(p, b), 0.0, "num"),
-        ("Gain-Loss Ratio", gain_loss_ratio(p), gain_loss_ratio(b), "num"),
-        ("Martin Ratio", martin_ratio(p, rf), martin_ratio(b, rf), "num"),
-        ("Kappa 3", kappa_3_ratio(p), kappa_3_ratio(b), "num"),
-        ("Stutzer Index", stutzer_index(p), stutzer_index(b), "num"),
         ("Skew", p.skew(), b.skew(), "num"),
         ("Kurtosis", p.kurtosis(), b.kurtosis(), "num"),
         ("Expected Daily", expected_return_by_period(p, 1), expected_return_by_period(b, 1), "pct"),
         ("Expected Monthly", expected_return_by_period(p, 21), expected_return_by_period(b, 21), "pct"),
         ("Expected Yearly", expected_return_by_period(p, TRADING_DAYS), expected_return_by_period(b, TRADING_DAYS), "pct"),
         ("Kelly Criterion", kelly_criterion_qfa(p), kelly_criterion_qfa(b), "pct"),
-        ("Daily VaR 95%", historical_var(p, 0.95), historical_var(b, 0.95), "pct"),
-        ("Daily CVaR 95%", historical_cvar(p, 0.95), historical_cvar(b, 0.95), "pct"),
-        ("Cornish-Fisher VaR 95%", cornish_fisher_var(p, 0.95), cornish_fisher_var(b, 0.95), "pct"),
-        ("Modified Sharpe (CF)", modified_sharpe_cf(p, rf, 0.95), modified_sharpe_cf(b, rf, 0.95), "num"),
+        ("Daily Value-at-Risk 95%", historical_var(p, 0.95), historical_var(b, 0.95), "pct"),
+        ("Expected Shortfall / CVaR 95%", historical_cvar(p, 0.95), historical_cvar(b, 0.95), "pct"),
+        ("Daily Value-at-Risk 99%", historical_var(p, 0.99), historical_var(b, 0.99), "pct"),
+        ("Expected Shortfall / CVaR 99%", historical_cvar(p, 0.99), historical_cvar(b, 0.99), "pct"),
         ("Win Rate", win_rate_qfa(p), win_rate_qfa(b), "pct"),
+        ("Max Consecutive Wins", max_consecutive_count(p, True), max_consecutive_count(b, True), "int"),
+        ("Max Consecutive Losses", max_consecutive_count(p, False), max_consecutive_count(b, False), "int"),
+        ("Gain/Pain Ratio", gain_to_pain_qfa(p), gain_to_pain_qfa(b), "num"),
+        ("Payoff Ratio", payoff_ratio_qfa(p), payoff_ratio_qfa(b), "num"),
         ("Profit Factor", profit_factor_qfa(p), profit_factor_qfa(b), "num"),
-        ("Pain Index", pain_index(p), pain_index(b), "num"),
-        ("Pain Ratio", pain_ratio(p, rf), pain_ratio(b, rf), "num"),
+        ("Tail Ratio", tail_ratio_qfa(p), tail_ratio_qfa(b), "num"),
+        ("Common Sense Ratio", common_sense_ratio_qfa(p), common_sense_ratio_qfa(b), "num"),
         ("Ulcer Index", ulcer_index_qfa(p), ulcer_index_qfa(b), "num"),
         ("Ulcer Performance Index", ulcer_performance_index_qfa(p, rf), ulcer_performance_index_qfa(b, rf), "num"),
     ]
@@ -2105,7 +2292,7 @@ def qfa_metrics_display_table(metrics: pd.DataFrame) -> pd.DataFrame:
 
 
 # ============================================================
-# EXPORT FUNCTIONS
+# EXPORTS
 # ============================================================
 
 def df_csv(df: pd.DataFrame) -> bytes:
@@ -2144,7 +2331,10 @@ def annual_returns_table_qfa(r: pd.Series) -> pd.DataFrame:
     if x.empty:
         return pd.DataFrame()
     annual = (1 + x).resample("Y").prod() - 1
-    return pd.DataFrame({"Year": annual.index.year, "Annual Return": annual.values})
+    return pd.DataFrame({
+        "Year": annual.index.year,
+        "Annual Return": annual.values,
+    })
 
 
 def drawdown_details_qfa(r: pd.Series, top_n: int = 10) -> pd.DataFrame:
@@ -2230,7 +2420,12 @@ def annual_returns_figure_qfa(r: pd.Series) -> go.Figure:
     annual = annual_returns_table_qfa(r)
     fig = go.Figure()
     if not annual.empty:
-        fig.add_trace(go.Bar(x=annual["Year"].astype(str), y=annual["Annual Return"], name="Annual Return", marker_color=QFA_COLORS["navy"]))
+        fig.add_trace(go.Bar(
+            x=annual["Year"].astype(str),
+            y=annual["Annual Return"],
+            name="Annual Return",
+            marker_color=QFA_COLORS["navy"],
+        ))
         fig.update_yaxes(tickformat=".0%")
     return layout(fig, "Annual Returns", 560)
 
@@ -2238,7 +2433,13 @@ def annual_returns_figure_qfa(r: pd.Series) -> go.Figure:
 def return_distribution_figure_qfa(r: pd.Series) -> go.Figure:
     x = _clean_return_series(r)
     fig = go.Figure()
-    fig.add_trace(go.Histogram(x=x.values, nbinsx=80, name="Daily Returns", marker_color=QFA_COLORS["slate"], opacity=0.85))
+    fig.add_trace(go.Histogram(
+        x=x.values,
+        nbinsx=80,
+        name="Daily Returns",
+        marker_color=QFA_COLORS["slate"],
+        opacity=0.85,
+    ))
     fig.add_vline(x=x.mean(), line_dash="dash", annotation_text="Mean")
     fig.add_vline(x=historical_var(x, 0.95), line_dash="dot", annotation_text="VaR 95%")
     fig.update_xaxes(tickformat=".1%", title="Daily Return")
@@ -2249,12 +2450,14 @@ def return_distribution_figure_qfa(r: pd.Series) -> go.Figure:
 def rolling_metrics_figure_qfa(p: pd.Series, b: pd.Series, rf: float) -> go.Figure:
     pp, bb = align_two(p, b, "Portfolio", "Benchmark")
     roll_sharpe = rolling_sharpe(pp, rf, 63)
-    roll_vol = pp.rolling(63).std() * np.sqrt(252)
+    roll_vol = pp.rolling(63).std() * np.sqrt(TRADING_DAYS)
     roll_beta = rolling_beta(pp, bb, 63)
     roll_te = rolling_tracking_error(pp, bb, 63)
 
     fig = make_subplots(
-        rows=4, cols=1, shared_xaxes=True,
+        rows=4,
+        cols=1,
+        shared_xaxes=True,
         subplot_titles=["Rolling Sharpe", "Rolling Volatility", "Rolling Beta vs ^GSPC", "Rolling Tracking Error vs ^GSPC"],
     )
     fig.add_trace(go.Scatter(x=roll_sharpe.index, y=roll_sharpe.values, mode="lines", name="Rolling Sharpe", line=dict(color=QFA_COLORS["navy"], width=2.0)), row=1, col=1)
@@ -2269,14 +2472,17 @@ def rolling_metrics_figure_qfa(p: pd.Series, b: pd.Series, rf: float) -> go.Figu
 def report_content_audit_table_qfa() -> pd.DataFrame:
     return pd.DataFrame([
         {"Section": "QuantStats-style ratios", "Included": "YES", "Details": "Sharpe, Sortino, Calmar, Omega, Treynor, Information Ratio, Kelly, Gain/Pain, Profit Factor, Tail Ratio, Ulcer."},
-        {"Section": "Advanced Performance Ratios", "Included": "YES", "Details": "Gain-Loss, Martin, Pain Index, Pain Ratio, Kappa 3, Stutzer Index."},
-        {"Section": "Risk Metrics", "Included": "YES", "Details": "Historical VaR/CVaR, Cornish-Fisher VaR/CVaR, Modified Sharpe."},
-        {"Section": "Benchmark-relative metrics", "Included": "YES", "Details": "Beta, R², Tracking Error, Treynor, Information Ratio, Up/Down Capture, Appraisal Ratio."},
-        {"Section": "Tail risk", "Included": "YES", "Details": "VaR 95/99 and CVaR 95/99 (Historical + Cornish-Fisher)."},
+        {"Section": "Return metrics", "Included": "YES", "Details": "CAGR, cumulative return, annual volatility, expected daily/monthly/yearly returns."},
+        {"Section": "Benchmark-relative metrics", "Included": "YES", "Details": "Beta, R², Tracking Error, Treynor, Information Ratio vs S&P 500 (^GSPC)."},
+        {"Section": "Tail risk", "Included": "YES", "Details": "VaR 95/99 and CVaR 95/99."},
         {"Section": "Drawdown analytics", "Included": "YES", "Details": "Max drawdown, longest drawdown days, drawdown episodes, underwater chart."},
         {"Section": "Charts", "Included": "YES", "Details": "Cumulative return, drawdown, rolling metrics, VaR/CVaR, monthly heatmap, annual return, return distribution."},
     ])
 
+
+# ============================================================
+# QFA INSTITUTIONAL TEARSHEET HTML (ENHANCED)
+# ============================================================
 
 def qfa_institutional_tearsheet_html(
     strategy_name: str,
@@ -2285,137 +2491,371 @@ def qfa_institutional_tearsheet_html(
     rf: float,
     metrics_row: pd.Series,
 ) -> bytes:
-    """QFA Institutional Tearsheet HTML - v4.14"""
+    """
+    QFA Institutional Tearsheet — QuantStats-format style report.
+    ENHANCED: Includes all QuantStats ratios + advanced risk metrics + additional figures.
+    """
     p, b = align_two(r, benchmark, "Portfolio", "Benchmark")
 
+    # ============================================================
+    # 1. QuantStats-Style Metrics (existing)
+    # ============================================================
     qfa_qs_metrics = qfa_quantstats_style_metrics(strategy_name, p, b, rf)
     qfa_qs_display = qfa_metrics_display_table(qfa_qs_metrics)
 
-    metrics_df = pd.DataFrame([{
-        "Strategy": strategy_name,
-        "Annual Return": f"{metrics_row.get('Annual Return', 0):.2%}",
-        "Annual Volatility": f"{metrics_row.get('Annual Volatility', 0):.2%}",
-        "Sharpe": f"{metrics_row.get('Sharpe', 0):.2f}",
-        "Max Drawdown": f"{metrics_row.get('Max Drawdown', 0):.2%}",
-        "VaR 95%": f"{metrics_row.get('VaR 95% Daily', 0):.2%}",
-        "CVaR 95%": f"{metrics_row.get('CVaR 95% Daily', 0):.2%}",
-        "Tracking Error": f"{metrics_row.get('Tracking Error vs Benchmark', 0):.2%}",
-        "Beta": f"{metrics_row.get('Beta vs Benchmark', 0):.2f}",
-        "Information Ratio": f"{metrics_row.get('Information Ratio', 0):.2f}",
-        "Gain-Loss Ratio": f"{gain_loss_ratio(p):.2f}",
-        "Martin Ratio": f"{martin_ratio(p, rf):.2f}",
-        "Modified Sharpe (CF)": f"{modified_sharpe_cf(p, rf, 0.95):.2f}",
-    }])
+    # ============================================================
+    # 2. New Advanced Performance Ratios
+    # ============================================================
+    advanced_ratios = pd.DataFrame([
+        {"Metric": "Gain-Loss Ratio (Bernardo-Ledoit)", "Value": f"{gain_loss_ratio(p):.4f}", "Benchmark": f"{gain_loss_ratio(b):.4f}"},
+        {"Metric": "Martin Ratio (CAGR / Ulcer)", "Value": f"{martin_ratio(p, rf):.4f}", "Benchmark": f"{martin_ratio(b, rf):.4f}"},
+        {"Metric": "Pain Index", "Value": f"{pain_index(p):.4f}", "Benchmark": f"{pain_index(b):.4f}"},
+        {"Metric": "Pain Ratio", "Value": f"{pain_ratio(p, rf):.4f}", "Benchmark": f"{pain_ratio(b, rf):.4f}"},
+        {"Metric": "Kappa 3 (Lower Partial Moment)", "Value": f"{kappa_3_ratio(p):.4f}", "Benchmark": f"{kappa_3_ratio(b):.4f}"},
+        {"Metric": "Stutzer Performance Index", "Value": f"{stutzer_index(p):.4f}", "Benchmark": f"{stutzer_index(b):.4f}"},
+    ])
 
+    # ============================================================
+    # 3. Cornish-Fisher Risk Metrics
+    # ============================================================
+    cf_metrics = pd.DataFrame([
+        {"Metric": "Historical VaR 95%", "Value": f"{historical_var(p, 0.95):.2%}", "Benchmark": f"{historical_var(b, 0.95):.2%}"},
+        {"Metric": "Cornish-Fisher VaR 95%", "Value": f"{cornish_fisher_var(p, 0.95):.2%}", "Benchmark": f"{cornish_fisher_var(b, 0.95):.2%}"},
+        {"Metric": "Historical CVaR 95%", "Value": f"{historical_cvar(p, 0.95):.2%}", "Benchmark": f"{historical_cvar(b, 0.95):.2%}"},
+        {"Metric": "Cornish-Fisher CVaR 95%", "Value": f"{cornish_fisher_cvar(p, 0.95):.2%}", "Benchmark": f"{cornish_fisher_cvar(b, 0.95):.2%}"},
+        {"Metric": "Modified Sharpe (CF-VaR)", "Value": f"{modified_sharpe_cf(p, rf, 0.95):.4f}", "Benchmark": f"{modified_sharpe_cf(b, rf, 0.95):.4f}"},
+        {"Metric": "Historical VaR 99%", "Value": f"{historical_var(p, 0.99):.2%}", "Benchmark": f"{historical_var(b, 0.99):.2%}"},
+        {"Metric": "Cornish-Fisher VaR 99%", "Value": f"{cornish_fisher_var(p, 0.99):.2%}", "Benchmark": f"{cornish_fisher_var(b, 0.99):.2%}"},
+    ])
+
+    # ============================================================
+    # 4. Benchmark-Relative Advanced Metrics
+    # ============================================================
+    capture = capture_ratios(p, b)
+    benchmark_relative = pd.DataFrame([
+        {"Metric": "Up Capture Ratio", "Value": f"{capture.get('Up Capture Ratio', np.nan):.4f}"},
+        {"Metric": "Down Capture Ratio", "Value": f"{capture.get('Down Capture Ratio', np.nan):.4f}"},
+        {"Metric": "Capture Ratio (Up/Down)", "Value": f"{capture.get('Capture Ratio (Up/Down)', np.nan):.4f}"},
+        {"Metric": "Appraisal Ratio (Alpha / Residual Vol)", "Value": f"{appraisal_ratio(p, b, rf):.4f}"},
+        {"Metric": "Information Ratio", "Value": f"{information_ratio(p, b):.4f}"},
+        {"Metric": "Treynor Ratio", "Value": f"{treynor_ratio_qfa(p, b, rf):.4f}"},
+        {"Metric": "R-Squared", "Value": f"{r_squared_qfa(p, b):.4f}"},
+    ])
+
+    # ============================================================
+    # 5. Additional Figures (Charts)
+    # ============================================================
+    
+    # Cumulative return
     eq = (1 + p).cumprod()
     beq = (1 + b).cumprod()
     dd = eq / eq.cummax() - 1
     risk = rolling_var_cvar(p, 63)
     te = rolling_tracking_error(p, b, 63)
     beta = rolling_beta(p, b, 63)
-
+    
     fig_eq = go.Figure()
     fig_eq.add_trace(go.Scatter(x=eq.index, y=eq.values, mode="lines", name=strategy_name, line=dict(color=QFA_COLORS["navy"], width=2.8)))
     fig_eq.add_trace(go.Scatter(x=beq.index, y=beq.values, mode="lines", name=BENCHMARK_NAME, line=dict(color=QFA_COLORS["gray"], width=2.2, dash="dash")))
     fig_eq.update_yaxes(title="Growth of $1")
     fig_eq = layout(fig_eq, f"{strategy_name} — Cumulative Return vs {BENCHMARK_NAME}", 560)
-
+    
+    # Drawdown
     fig_dd = go.Figure()
     fig_dd.add_trace(go.Scatter(x=dd.index, y=dd.values, mode="lines", fill="tozeroy", name="Drawdown", line=dict(color=QFA_COLORS["risk_red"], width=2.2)))
     fig_dd.update_yaxes(tickformat=".0%")
     fig_dd = layout(fig_dd, f"{strategy_name} — Underwater Drawdown", 560)
-
+    
+    # Rolling risk
     fig_risk = make_subplots(rows=2, cols=1, shared_xaxes=True, subplot_titles=["Rolling Tracking Error", "Rolling Beta"])
     fig_risk.add_trace(go.Scatter(x=te.index, y=te.values, mode="lines", name="Tracking Error", line=dict(color=QFA_COLORS["muted_gold"], width=2.2)), row=1, col=1)
     fig_risk.add_trace(go.Scatter(x=beta.index, y=beta.values, mode="lines", name="Beta", line=dict(color=QFA_COLORS["slate"], width=2.2)), row=2, col=1)
     fig_risk.update_yaxes(tickformat=".0%", row=1, col=1)
     fig_risk = layout(fig_risk, f"{strategy_name} — Benchmark Relative Risk vs {BENCHMARK_NAME}", 680)
-
+    
+    # Tail risk
+    fig_tail = go.Figure()
+    for i, col in enumerate(risk.columns):
+        fig_tail.add_trace(go.Scatter(x=risk.index, y=risk[col], mode="lines", name=col, line=dict(color=QFA_SEQUENCE[i % len(QFA_SEQUENCE)], width=2.0)))
+    fig_tail.update_yaxes(tickformat=".1%")
+    fig_tail = layout(fig_tail, f"{strategy_name} — Rolling VaR / CVaR", 560)
+    
+    # Rolling metrics
     fig_roll = rolling_metrics_figure_qfa(p, b, rf)
-    fig_dist = return_distribution_figure_qfa(p)
+    
+    # Monthly and annual figures
     fig_month = monthly_heatmap_figure_qfa(p)
     fig_annual = annual_returns_figure_qfa(p)
-
+    fig_dist = return_distribution_figure_qfa(p)
+    
+    # NEW: Advanced ratios bar chart
+    adv_plot_data = pd.DataFrame({
+        "Metric": ["Gain-Loss", "Martin", "Pain Ratio", "Kappa 3", "Stutzer"],
+        "Strategy": [gain_loss_ratio(p), martin_ratio(p, rf), pain_ratio(p, rf), kappa_3_ratio(p), stutzer_index(p)],
+        "Benchmark": [gain_loss_ratio(b), martin_ratio(b, rf), pain_ratio(b, rf), kappa_3_ratio(b), stutzer_index(b)]
+    })
+    fig_adv = go.Figure()
+    fig_adv.add_trace(go.Bar(x=adv_plot_data["Metric"], y=adv_plot_data["Strategy"], name=strategy_name, marker_color=QFA_COLORS["navy"]))
+    fig_adv.add_trace(go.Bar(x=adv_plot_data["Metric"], y=adv_plot_data["Benchmark"], name=BENCHMARK_NAME, marker_color=QFA_COLORS["gray"]))
+    fig_adv.update_yaxes(title="Ratio Value")
+    fig_adv = layout(fig_adv, "Advanced Performance Ratios Comparison", 500)
+    
+    # NEW: Cornish-Fisher vs Historical VaR comparison
+    cf_plot_data = pd.DataFrame({
+        "VaR Type": ["VaR 95%", "CVaR 95%", "VaR 99%", "CVaR 99%"],
+        "Historical": [historical_var(p, 0.95), historical_cvar(p, 0.95), historical_var(p, 0.99), historical_cvar(p, 0.99)],
+        "Cornish-Fisher": [cornish_fisher_var(p, 0.95), cornish_fisher_cvar(p, 0.95), cornish_fisher_var(p, 0.99), cornish_fisher_cvar(p, 0.99)]
+    })
+    fig_cf = go.Figure()
+    fig_cf.add_trace(go.Bar(x=cf_plot_data["VaR Type"], y=cf_plot_data["Historical"], name="Historical", marker_color=QFA_COLORS["steel"]))
+    fig_cf.add_trace(go.Bar(x=cf_plot_data["VaR Type"], y=cf_plot_data["Cornish-Fisher"], name="Cornish-Fisher", marker_color=QFA_COLORS["muted_gold"]))
+    fig_cf.update_yaxes(title="Risk Level", tickformat=".1%")
+    fig_cf = layout(fig_cf, "Historical vs Cornish-Fisher Risk Metrics", 500)
+    
+    # Key metrics snapshot table
+    metrics_df = pd.DataFrame([{
+        "Strategy": strategy_name,
+        "Annual Return": f"{metrics_row['Annual Return']:.2%}",
+        "Annual Volatility": f"{metrics_row['Annual Volatility']:.2%}",
+        "Sharpe": f"{metrics_row['Sharpe']:.2f}",
+        "Max Drawdown": f"{metrics_row['Max Drawdown']:.2%}",
+        "VaR 95% Daily": f"{metrics_row['VaR 95% Daily']:.2%}",
+        "CVaR 95% Daily": f"{metrics_row['CVaR 95% Daily']:.2%}",
+        "Tracking Error": f"{metrics_row['Tracking Error vs Benchmark']:.2%}",
+        "Beta": f"{metrics_row['Beta vs Benchmark']:.2f}",
+        "Information Ratio": f"{metrics_row['Information Ratio']:.2f}",
+        "Gain-Loss Ratio": f"{gain_loss_ratio(p):.2f}",
+        "Martin Ratio": f"{martin_ratio(p, rf):.2f}",
+        "Kappa 3": f"{kappa_3_ratio(p):.2f}",
+        "Modified Sharpe (CF)": f"{modified_sharpe_cf(p, rf, 0.95):.2f}",
+    }])
+    
+    # Monthly and annual tables
     monthly_tbl = monthly_returns_table_qfa(p).copy()
-    monthly_html = monthly_tbl.applymap(lambda v: "" if pd.isna(v) else f"{v:.2%}").to_html(border=0, classes="qfa-table", escape=False) if not monthly_tbl.empty else "<p>No monthly return table available.</p>"
-
+    monthly_html = monthly_tbl.applymap(lambda v: "" if pd.isna(v) else f"{v:.2%}").to_html(
+        border=0, classes="qfa-table", escape=False
+    ) if not monthly_tbl.empty else "<p>No monthly return table available.</p>"
+    
     annual_tbl = annual_returns_table_qfa(p)
     annual_html = html_table_formatted(annual_tbl, pct_cols=["Annual Return"]) if not annual_tbl.empty else "<p>No annual return table available.</p>"
-
+    
     dd_tbl = drawdown_details_qfa(p)
     dd_html = html_table_formatted(dd_tbl, pct_cols=["Max Drawdown"]) if not dd_tbl.empty else "<p>No drawdown episode table available.</p>"
-
+    
     audit_html = html_table_formatted(report_content_audit_table_qfa())
+    
+    # Capture ratios pie chart for interpretation
+    capture_pie_data = pd.DataFrame({
+        "Category": ["Up Capture", "Down Capture"],
+        "Ratio": [capture.get("Up Capture Ratio", 0), capture.get("Down Capture Ratio", 0)]
+    })
+    fig_capture = go.Figure(data=[go.Pie(
+        labels=capture_pie_data["Category"], 
+        values=capture_pie_data["Ratio"],
+        marker_colors=[QFA_COLORS["green"], QFA_COLORS["risk_red"]],
+        hole=0.4,
+        textinfo="label+percent"
+    )])
+    fig_capture = layout(fig_capture, "Capture Ratios Distribution", 450)
 
+    # ============================================================
+    # 6. HTML Document Assembly
+    # ============================================================
+    
     html_doc = f"""
     <!DOCTYPE html>
     <html>
     <head>
         <meta charset="utf-8">
-        <title>QFA Institutional Tearsheet v4.14 — {html.escape(strategy_name)}</title>
+        <title>QFA Institutional Tearsheet — {html.escape(strategy_name)}</title>
         <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
         <style>
-            body {{ font-family: DejaVu Sans, Segoe UI, Arial, sans-serif; background:#f5f7fb; color:#111827; margin:0; }}
-            header {{ background:#0f172a; color:white; padding:28px 36px; border-bottom:5px solid #b08900; }}
+            body {{
+                font-family: DejaVu Sans, Segoe UI, Arial, sans-serif;
+                background:#f5f7fb;
+                color:#111827;
+                margin:0;
+            }}
+            header {{
+                background:#0f172a;
+                color:white;
+                padding:28px 36px;
+                border-bottom:5px solid #b08900;
+            }}
             main {{ padding:28px 36px; }}
             h1 {{ margin:0; font-size:30px; }}
-            h2 {{ margin-top:30px; color:#0f172a; border-bottom:2px solid #e5e7eb; padding-bottom:8px; }}
-            h3 {{ margin-top:20px; color:#334155; font-size:18px; }}
-            .note {{ background:#fff7ed; border-left:5px solid #92400e; padding:14px 16px; border-radius:8px; color:#78350f; margin:16px 0; line-height:1.45; }}
-            .verified {{ background:#ecfdf5; border-left:5px solid #166534; padding:12px 16px; border-radius:8px; color:#064e3b; margin:16px 0; font-weight:700; }}
-            .qfa-table {{ width:100%; border-collapse:collapse; background:white; margin:18px 0; border-radius:12px; overflow:hidden; table-layout:fixed; box-shadow:0 8px 18px rgba(15,23,42,.06); }}
-            .qfa-table th {{ background:#111827; color:white; text-align:left; padding:9px; font-size:12px; white-space:normal; word-break:break-word; }}
-            .qfa-table td {{ border-bottom:1px solid #e5e7eb; padding:8px; font-size:12px; white-space:normal; word-break:break-word; vertical-align:top; }}
-            .two-col {{ display:grid; grid-template-columns: 1fr 1fr; gap:18px; }}
-            @media (max-width: 1000px) {{ .two-col {{ grid-template-columns: 1fr; }} }}
+            h2 {{
+                margin-top:30px;
+                color:#0f172a;
+                border-bottom:2px solid #e5e7eb;
+                padding-bottom:8px;
+            }}
+            h3 {{
+                margin-top:20px;
+                color:#334155;
+                font-size:18px;
+            }}
+            .note {{
+                background:#fff7ed;
+                border-left:5px solid #92400e;
+                padding:14px 16px;
+                border-radius:8px;
+                color:#78350f;
+                margin:16px 0;
+                line-height:1.45;
+            }}
+            .verified {{
+                background:#ecfdf5;
+                border-left:5px solid #166534;
+                padding:12px 16px;
+                border-radius:8px;
+                color:#064e3b;
+                margin:16px 0;
+                font-weight:700;
+            }}
+            .qfa-table {{
+                width:100%;
+                border-collapse:collapse;
+                background:white;
+                margin:18px 0;
+                border-radius:12px;
+                overflow:hidden;
+                table-layout:fixed;
+                box-shadow:0 8px 18px rgba(15,23,42,.06);
+            }}
+            .qfa-table th {{
+                background:#111827;
+                color:white;
+                text-align:left;
+                padding:9px;
+                font-size:12px;
+                white-space:normal;
+                word-break:break-word;
+            }}
+            .qfa-table td {{
+                border-bottom:1px solid #e5e7eb;
+                padding:8px;
+                font-size:12px;
+                white-space:normal;
+                word-break:break-word;
+                vertical-align:top;
+            }}
+            .two-col {{
+                display:grid;
+                grid-template-columns: 1fr 1fr;
+                gap:18px;
+            }}
+            .three-col {{
+                display:grid;
+                grid-template-columns: 1fr 1fr 1fr;
+                gap:18px;
+            }}
+            @media (max-width: 1000px) {{
+                .two-col {{ grid-template-columns: 1fr; }}
+                .three-col {{ grid-template-columns: 1fr; }}
+            }}
         </style>
     </head>
     <body>
         <header>
-            <h1>QFA Institutional Tearsheet v4.14 — {html.escape(strategy_name)}</h1>
+            <h1>QFA Institutional Tearsheet — {html.escape(strategy_name)}</h1>
             <p>Benchmark: S&amp;P 500 (^GSPC) | Generated: {dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
         </header>
         <main>
-            <div class="verified">v4.14 TRUE HEDGE FUND VERSION — Includes QuantStats ratios, Advanced Risk Metrics (Gain-Loss, Martin, Kappa 3, Stutzer), Cornish-Fisher VaR/CVaR (corrected), Capture Ratios, Appraisal Ratio, and comprehensive chart suite.</div>
-            <div class="note">All returns from Yahoo Finance only — no synthetic data. Benchmark-relative metrics calculated against S&amp;P 500 (^GSPC).</div>
+            <div class="verified">
+                v4.13 ENHANCED — This report includes QuantStats-style ratios, Advanced Risk Metrics (Gain-Loss, Martin, Kappa 3, Stutzer), 
+                Cornish-Fisher VaR/CVaR, Capture Ratios, Appraisal Ratio, and comprehensive chart suite.
+            </div>
+            <div class="note">
+                This report is generated from the selected strategy's validated daily return stream (Yahoo Finance only, no synthetic data).
+                Benchmark-relative metrics are calculated against S&amp;P 500 (^GSPC).
+            </div>
 
+            <!-- Report Content Audit -->
             <h2>Report Content Audit</h2>
             {audit_html}
 
+            <!-- QuantStats-Style Summary Metrics -->
             <h2>QuantStats-Style Summary Metrics</h2>
             {_html_table(qfa_qs_display)}
 
+            <!-- Key Metrics Snapshot -->
             <h2>Key Metrics Snapshot</h2>
             {_html_table(metrics_df)}
 
+            <!-- Advanced Performance Ratios -->
+            <h2>Advanced Performance Ratios</h2>
+            <div class="two-col">
+                <div>
+                    <h3>Advanced Ratios</h3>
+                    {_html_table(advanced_ratios)}
+                </div>
+                <div>
+                    <h3>Cornish-Fisher Risk Metrics</h3>
+                    {_html_table(cf_metrics)}
+                </div>
+            </div>
+
+            <!-- Benchmark-Relative Metrics -->
+            <h2>Benchmark-Relative Metrics</h2>
+            <div class="two-col">
+                <div>
+                    {_html_table(benchmark_relative)}
+                </div>
+                <div>
+                    {_fig_to_html(fig_capture)}
+                </div>
+            </div>
+
+            <!-- Performance Charts -->
             <h2>Performance Overview</h2>
             {_fig_to_html(fig_eq)}
 
             <h2>Drawdown Analytics</h2>
             <div class="two-col">
                 <div>{_fig_to_html(fig_dd)}</div>
-                <div><h3>Top Drawdown Episodes</h3>{dd_html}</div>
+                <div>
+                    <h3>Top Drawdown Episodes</h3>
+                    {dd_html}
+                </div>
             </div>
 
+            <!-- Rolling Risk Metrics -->
             <h2>Rolling Risk / Return Metrics</h2>
             {_fig_to_html(fig_roll)}
 
+            <!-- Benchmark Relative Risk -->
             <h2>Benchmark Relative Risk</h2>
             {_fig_to_html(fig_risk)}
 
-            <h2>Return Distribution</h2>
-            {_fig_to_html(fig_dist)}
+            <!-- Tail Risk -->
+            <h2>Tail Risk — VaR / CVaR</h2>
+            <div class="two-col">
+                <div>{_fig_to_html(fig_tail)}</div>
+                <div>{_fig_to_html(fig_cf)}</div>
+            </div>
 
+            <!-- Return Distribution -->
+            <h2>Return Distribution</h2>
+            <div class="two-col">
+                <div>{_fig_to_html(fig_dist)}</div>
+                <div>{_fig_to_html(fig_adv)}</div>
+            </div>
+
+            <!-- Monthly and Annual Returns -->
             <h2>Monthly and Annual Returns</h2>
             <div class="two-col">
                 <div>{_fig_to_html(fig_month)}</div>
                 <div>{_fig_to_html(fig_annual)}</div>
             </div>
+
             <h3>Monthly Returns Table</h3>
             {monthly_html}
+
             <h3>Annual Returns Table</h3>
             {annual_html}
 
+            <!-- Footer with interpretation guide -->
             <div class="note" style="margin-top:30px;">
                 <strong>Interpretation Guide:</strong><br>
                 • <strong>Gain-Loss Ratio &gt; 1.5</strong> indicates favorable return asymmetry.<br>
@@ -2425,7 +2865,7 @@ def qfa_institutional_tearsheet_html(
                 • <strong>Cornish-Fisher VaR</strong> adjusts for skewness/kurtosis - compare with historical VaR.<br>
                 • <strong>Capture Ratio &gt; 1</strong> means portfolio outperforms benchmark in both up/down markets.<br>
                 • <strong>Appraisal Ratio</strong> measures active return per unit of residual risk (higher = better active management).<br>
-                • <strong>Modified Sharpe (CF)</strong> uses Cornish-Fisher CVaR as risk measure.
+                • <strong>Modified Sharpe (CF)</strong> uses Cornish-Fisher VaR as risk measure.
             </div>
         </main>
     </body>
@@ -2435,6 +2875,9 @@ def qfa_institutional_tearsheet_html(
 
 
 def quantstats_html(strategy_name: str, r: pd.Series, rf: float) -> Tuple[Optional[bytes], str]:
+    """
+    Robust QuantStats report generator.
+    """
     if not QS_AVAILABLE:
         return None, "QuantStats package not available."
 
@@ -2458,35 +2901,52 @@ def quantstats_html(strategy_name: str, r: pd.Series, rf: float) -> Tuple[Option
             return None, "Insufficient observations."
 
         try:
-            qs.reports.html(clean, benchmark=None, rf=rf, output=path, title=f"QFA Prime QuantStats — {strategy_name}", download_filename=path)
+            qs.reports.html(
+                clean,
+                benchmark=None,
+                rf=rf,
+                output=path,
+                title=f"QFA Prime QuantStats — {strategy_name}",
+                download_filename=path,
+            )
         except TypeError:
-            qs.reports.html(clean, benchmark=None, rf=rf, output=path, title=f"QFA Prime QuantStats — {strategy_name}")
+            qs.reports.html(
+                clean,
+                benchmark=None,
+                rf=rf,
+                output=path,
+                title=f"QFA Prime QuantStats — {strategy_name}",
+            )
 
         with open(path, "rb") as f:
             data = f.read()
+
         try:
             os.remove(path)
         except Exception:
             pass
 
-        return data, "OK" if data and len(data) >= 1000 else "Empty report"
+        if not data or len(data) < 1000:
+            return None, "Empty QuantStats report."
+
+        return data, "OK"
+
     except Exception as exc:
         return None, str(exc)
 
 
 # ============================================================
-# UI - MAIN APPLICATION
+# UI
 # ============================================================
 
 def main():
     global COMMODITY_UNIVERSE
-
     st.markdown(
-        """
+        f"""
         <div class="qfa-hero">
             <h1>QFA Prime Finance Platform</h1>
             <p>Commodity Instrument Class — Institutional Interactive Strategy Lab</p>
-            <p>v4.14 | True Hedge Fund Version | Fixed VaR/CVaR + Advanced Risk Analytics</p>
+            <p>Alpha Engine + Advanced Risk Analytics</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -2498,21 +2958,36 @@ def main():
 
     with st.sidebar:
         st.header("Portfolio Gate")
+
         if st.button("Clear cache"):
             clear_cache()
 
-        universe_mode = st.selectbox("Data Universe", options=list(UNIVERSE_MODES.keys()), index=0)
+        universe_mode = st.selectbox(
+            "Data Universe",
+            options=list(UNIVERSE_MODES.keys()),
+            index=0,
+        )
         active_universe = UNIVERSE_MODES[universe_mode]
         COMMODITY_UNIVERSE = active_universe
 
         if "ETF Proxies" in universe_mode:
-            st.markdown("<div class='qfa-transparency-badge'>ETF PROXY MODE ACTIVE</div>", unsafe_allow_html=True)
+            st.markdown(
+                "<div class='qfa-transparency-badge'>ETF PROXY MODE ACTIVE</div>",
+                unsafe_allow_html=True,
+            )
             with st.expander("Show proxy mapping", expanded=True):
                 st.dataframe(PROXY_TRANSPARENCY_TABLE, use_container_width=True, hide_index=True)
         else:
-            st.markdown("<div class='qfa-transparency-badge'>FUTURES MODE ACTIVE</div>", unsafe_allow_html=True)
+            st.markdown(
+                "<div class='qfa-transparency-badge'>FUTURES MODE ACTIVE</div>",
+                unsafe_allow_html=True,
+            )
 
-        selected_display = st.multiselect("Commodity instruments", options=[v["display"] for v in active_universe.values()], default=[v["display"] for v in active_universe.values()])
+        selected_display = st.multiselect(
+            "Commodity instruments",
+            options=[v["display"] for v in active_universe.values()],
+            default=[v["display"] for v in active_universe.values()],
+        )
         display_to_ticker = {v["display"]: k for k, v in active_universe.items()}
         selected_tickers = [display_to_ticker[d] for d in selected_display]
 
@@ -2537,17 +3012,29 @@ def main():
 
         st.divider()
         st.subheader("Optimization Constraints")
+        
+        # Dinamik max_weight hesaplama - EQUAL WEIGHT FIX
         n_instruments = len(selected_tickers) if selected_tickers else 5
         equal_weight_pct = 1.0 / n_instruments if n_instruments > 0 else 0.20
         suggested_max_weight = min(0.45, equal_weight_pct * 2.5)
-        st.caption(f"📊 Equal weight per instrument: {equal_weight_pct:.1%}")
-        st.caption(f"💡 Suggested max weight cap: {suggested_max_weight:.1%} (2.5× equal weight)")
-        max_weight = st.slider("Optimization max single weight", min_value=equal_weight_pct, max_value=1.00, value=suggested_max_weight, step=0.05)
-        if max_weight < equal_weight_pct:
-            st.error(f"Max weight cap cannot be less than equal weight ({equal_weight_pct:.1%}). Adjusting...")
+        
+        st.caption(f"📊 **Equal weight per instrument:** {equal_weight_pct:.1%}")
+        st.caption(f"💡 **Suggested max weight cap:** {suggested_max_weight:.1%} (2.5× equal weight)")
+        
+        max_weight = st.slider(
+            "Optimization max single weight", 
+            min_value=equal_weight_pct,
+            max_value=1.00, 
+            value=suggested_max_weight,
+            step=0.05,
+            help=f"Equal weight is {equal_weight_pct:.1%}. Values above {equal_weight_pct * 2:.0%} may cause concentration."
+        )
+        
+        if max_weight > equal_weight_pct * 2:
+            st.warning(f"⚠️ Max weight cap ({max_weight:.1%}) exceeds 2× equal weight ({equal_weight_pct * 2:.1%}). Portfolio may become concentrated.")
+        elif max_weight < equal_weight_pct:
+            st.error(f"❌ Max weight cap ({max_weight:.1%}) cannot be less than equal weight ({equal_weight_pct:.1%}). Adjusting to {equal_weight_pct:.1%}.")
             max_weight = equal_weight_pct
-        elif max_weight > equal_weight_pct * 2:
-            st.warning(f"Max weight cap ({max_weight:.1%}) exceeds 2× equal weight — may cause concentration.")
 
         st.divider()
         st.subheader("Risk Controls")
@@ -2606,9 +3093,15 @@ def main():
     strategy_returns, strategy_weights, weights_df, opt_perf = build_strategy_set(prices, returns, rf, max_weight, custom_weights)
 
     alpha_engine = build_alpha_engine(
-        prices=prices, returns=returns, rf=rf, max_weight=max_weight,
-        momentum_short=alpha_mom_short, momentum_long=alpha_mom_long,
-        meanrev_window=alpha_meanrev_window, vol_window=alpha_vol_window, ic_horizon=alpha_ic_horizon,
+        prices=prices,
+        returns=returns,
+        rf=rf,
+        max_weight=max_weight,
+        momentum_short=alpha_mom_short,
+        momentum_long=alpha_mom_long,
+        meanrev_window=alpha_meanrev_window,
+        vol_window=alpha_vol_window,
+        ic_horizon=alpha_ic_horizon,
     )
     strategy_returns["Alpha Composite"] = alpha_engine["returns"]
     strategy_weights["Alpha Composite"] = alpha_engine["weights"].iloc[-1].to_dict() if not alpha_engine["weights"].empty else {}
@@ -2616,21 +3109,24 @@ def main():
     if "Alpha Composite" not in weights_df.columns:
         weights_df["Alpha Composite"] = pd.Series(strategy_weights["Alpha Composite"]).reindex(weights_df["Ticker"]).fillna(0.0).values
 
+    # Align strategies to benchmark
     for name in list(strategy_returns.keys()):
         p, b = align_two(strategy_returns[name], benchmark_returns, name, "Benchmark")
         strategy_returns[name] = p
     benchmark_returns = benchmark_returns.reindex(next(iter(strategy_returns.values())).index).dropna()
 
     all_strategy_names = list(strategy_returns.keys())
-    selected_strategies = st.sidebar.multiselect("Strategies shown in charts", options=all_strategy_names, default=all_strategy_names)
+    selected_strategies = st.sidebar.multiselect(
+        "Strategies shown in charts",
+        options=all_strategy_names,
+        default=all_strategy_names,
+    )
     if not selected_strategies:
         selected_strategies = all_strategy_names
 
     strategy_metrics = metrics_for_returns({k: strategy_returns[k] for k in selected_strategies}, benchmark_returns, rf)
     all_strategy_metrics = metrics_for_returns(strategy_returns, benchmark_returns, rf)
-
-    # Strategy Ranking Engine - NEW in v4.14
-    ranking_df = rank_strategies(all_strategy_metrics, rf)
+    interpretation = interpret_strategy_table(all_strategy_metrics)
 
     instrument_map = {f"{COMMODITY_UNIVERSE[t]['display']} ({t})": returns[t] for t in returns.columns}
     instrument_metrics = metrics_for_returns(instrument_map, benchmark_returns, rf)
@@ -2640,23 +3136,44 @@ def main():
     primary_row = all_strategy_metrics[all_strategy_metrics["Strategy / Instrument"] == primary].iloc[0]
 
     tabs = st.tabs([
-        "Executive Dashboard", "Portfolio Weights", "Optimization", "Performance Metrics", "Risk Metrics",
-        "Rolling Beta", "Tracking Error", "VaR / CVaR", "Drawdown", "Correlation",
-        "Log Return Differences", "Rolling Sharpe", "Strategy Ranking", "Advanced Risk",
-        "GARCH Volatility Lab", "QFA Tearsheet", "Portfolio Strategy Notes", "Alpha Generation",
-        "Alpha Engine LIVE", "Alpha IC Validation", "Alpha Portfolio", "Info Hub", "Data Quality", "Export Center",
+        "Executive Dashboard",
+        "Portfolio Weights",
+        "Optimization",
+        "Performance Metrics",
+        "Risk Metrics",
+        "Rolling Beta",
+        "Tracking Error",
+        "VaR / CVaR",
+        "Drawdown",
+        "Correlation",
+        "Log Return Differences",
+        "Rolling Sharpe",
+        "Advanced Risk & Performance",
+        "GARCH Volatility Lab",
+        "QFA Tearsheet Reports | Select Your Strategy First!",
+        "Portfolio Strategy Notes",
+        "Alpha Generation",
+        "Alpha Engine LIVE",
+        "Alpha IC Validation",
+        "Alpha Portfolio",
+        "Info Hub",
+        "Data Quality",
+        "Export Center",
     ])
 
     with tabs[0]:
         st.subheader("Advanced Institutional KPI Layout")
         mode_label = "ETF Proxy" if "ETF Proxies" in universe_mode else "Futures"
-        st.markdown(f"""
-        <div class="qfa-note">
-        Primary strategy: <b>{primary}</b>. Active data mode: <b>{mode_label}</b>.<br>
-        Equal weight per instrument: <b>{equal_weight_pct:.1%}</b> | Max weight cap: <b>{max_weight:.1%}</b>
-        </div>
-        """, unsafe_allow_html=True)
-
+        st.markdown(
+            f"""
+            <div class="qfa-note">
+            Primary strategy: <b>{primary}</b>. Active data mode: <b>{mode_label}</b>.
+            Sidebar parameters remain active: custom weights, RF rate, max weight constraint, rolling window, TE bands, GARCH model set and Bollinger settings.
+            Equal weight per instrument: <b>{equal_weight_pct:.1%}</b> | Max weight cap: <b>{max_weight:.1%}</b>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
         st.markdown("<div class='qfa-kpi-band'><div class='qfa-kpi-band-title'>Portfolio Risk / Return Command Center</div>", unsafe_allow_html=True)
         c = st.columns(8)
         with c[0]: kpi_card("Annual Return", fmt_pct(primary_row["Annual Return"]), primary, tone_for_return(primary_row["Annual Return"]))
@@ -2666,7 +3183,8 @@ def main():
         with c[4]: kpi_card("VaR 95%", fmt_pct(primary_row["VaR 95% Daily"]), "daily", "warn")
         with c[5]: kpi_card("CVaR 95%", fmt_pct(primary_row["CVaR 95% Daily"]), "tail loss", "bad")
         with c[6]: kpi_card("Tracking Error", fmt_pct(primary_row["Tracking Error vs Benchmark"]), "vs ^GSPC", tone_for_te(primary_row["Tracking Error vs Benchmark"]))
-        with c[7]: kpi_card("Beta", fmt_num(primary_row["Beta vs Benchmark"]), "vs ^GSPC", tone_for_beta(primary_row["Beta vs Benchmark"]))
+        with c[7]: kpi_card("Beta", fmt_num(primary_row["Beta vs Benchmark"]), "vs ^GSPC", "neutral")
+
         st.markdown("</div>", unsafe_allow_html=True)
 
         c2 = st.columns(5)
@@ -2678,14 +3196,21 @@ def main():
 
         safe_chart(fig_strategy_cumulative(strategy_returns, benchmark_returns, selected_strategies))
         safe_chart(fig_risk_return(strategy_metrics))
+        safe_df(interpretation)
 
+    # ============================================================
+    # TAB 1-11 (Portfolio Weights through Rolling Sharpe)
+    # ============================================================
+    
     with tabs[1]:
         st.subheader("Portfolio Weights")
+        st.markdown("<div class='qfa-note'>Weights are recalculated from sidebar inputs and optimization settings.</div>", unsafe_allow_html=True)
         safe_chart(fig_weights(weights_df, selected_strategies))
         safe_df(weights_df)
 
     with tabs[2]:
         st.subheader("Optimization")
+        st.markdown("<div class='qfa-note'>PyPortfolioOpt computes Max Sharpe and Min Volatility with the selected max-weight constraint.</div>", unsafe_allow_html=True)
         safe_chart(fig_weights(weights_df, ["Max Sharpe", "Min Volatility"] if "Max Sharpe" in weights_df.columns else selected_strategies))
         safe_chart(fig_risk_return(all_strategy_metrics))
         safe_df(opt_perf)
@@ -2701,6 +3226,8 @@ def main():
         safe_chart(fig_te_beta_map(strategy_metrics))
         safe_chart(fig_tail_bars(strategy_metrics))
         safe_df(strategy_metrics)
+        st.subheader("User-Friendly Metric Dictionary")
+        safe_df(metric_dictionary())
 
     with tabs[5]:
         st.subheader("Rolling Beta")
@@ -2736,155 +3263,360 @@ def main():
     with tabs[9]:
         st.subheader("Correlation")
         safe_chart(fig_corr(returns))
+        st.subheader("Instrument Metrics")
         safe_df(instrument_metrics)
 
     with tabs[10]:
-        st.subheader("Log Return Differences")
+        st.subheader("ETF / Instrument Log Return Differences and Bollinger Bands")
+        st.markdown(
+            "<div class='qfa-note'>This tab shows log-return differences between selected instruments. In ETF Proxy mode, this makes proxy behavior transparent. Bollinger bands help identify unusual relative-return deviations.</div>",
+            unsafe_allow_html=True,
+        )
         lr = log_returns(prices)
-        base_ticker = st.selectbox("Base ticker", options=list(lr.columns), index=0, format_func=lambda t: COMMODITY_UNIVERSE.get(t, {}).get("display", t))
+        base_ticker = st.selectbox(
+            "Base ticker for log-return differences",
+            options=list(lr.columns),
+            index=0,
+            format_func=lambda t: COMMODITY_UNIVERSE.get(t, {}).get("display", t),
+        )
         diff = return_difference_series(lr, base_ticker)
         safe_chart(fig_log_return_difference(lr, base_ticker))
         if not diff.empty:
-            spread_choice = st.selectbox("Spread for Bollinger", options=list(diff.columns), index=0)
+            spread_choice = st.selectbox("Spread for Bollinger analysis", options=list(diff.columns), index=0)
             safe_chart(fig_log_return_difference_bollinger(diff, spread_choice, boll_window, boll_std))
+            safe_df(diff.tail(250).reset_index().rename(columns={"index": "Date"}))
+        else:
+            st.info("No spread available. Select at least two instruments.")
 
     with tabs[11]:
         st.subheader("Rolling Sharpe")
         safe_chart(fig_rolling_sharpe(strategy_returns, selected_strategies, rf, rolling_window))
+        st.markdown("<div class='qfa-note'>Rolling Sharpe helps users understand whether risk-adjusted performance is stable or only period-specific.</div>", unsafe_allow_html=True)
 
+    # ============================================================
+    # TAB 12: Advanced Risk & Performance Analytics
+    # ============================================================
     with tabs[12]:
-        st.subheader("Strategy Ranking Engine — v4.14")
-        st.markdown("<div class='qfa-note'>Strategies ranked by composite score based on Sharpe, Sortino, Calmar, Gain-Loss, Information Ratio, Max Drawdown (inverted), and Volatility (inverted).</div>", unsafe_allow_html=True)
-        if not ranking_df.empty:
-            st.dataframe(ranking_df.style.format({"Composite Score": "{:.3f}"}), use_container_width=True, hide_index=True)
-            st.caption("Rank 1 = Best overall risk-adjusted performance | Scores normalized 0-1")
-        else:
-            st.info("Not enough data for ranking.")
-
-    with tabs[13]:
         st.subheader("Advanced Risk & Performance Analytics")
-        adv_strategy = st.selectbox("Select strategy", options=selected_strategies, index=0)
+        st.markdown(
+            "<div class='qfa-note'>This tab provides institutional-grade advanced risk metrics: "
+            "Cornish-Fisher VaR/CVaR, Gain-Loss Ratio, Martin Ratio, Pain Index, Kappa 3, Stutzer Index, "
+            "Up/Down Capture Ratios, Appraisal Ratio, Kalman Filter Beta, and Regime-Conditional Metrics.</div>",
+            unsafe_allow_html=True,
+        )
+        
+        adv_strategy = st.selectbox(
+            "Select strategy for advanced analysis",
+            options=selected_strategies,
+            index=0,
+            key="adv_strategy_select"
+        )
+        
         if adv_strategy in strategy_returns:
             adv_r = strategy_returns[adv_strategy]
             adv_p, adv_b = align_two(adv_r, benchmark_returns, adv_strategy, "Benchmark")
-
-            col1, col2 = st.columns(2)
+            
+            col1, col2, col3 = st.columns(3)
+            
             with col1:
-                st.markdown("### Advanced Ratios")
-                adv_df = pd.DataFrame([
+                st.markdown("### Risk-Adjusted Performance")
+                adv_metrics = pd.DataFrame([
                     {"Metric": "Gain-Loss Ratio", "Value": f"{gain_loss_ratio(adv_p):.3f}"},
                     {"Metric": "Martin Ratio", "Value": f"{martin_ratio(adv_p, rf):.3f}"},
                     {"Metric": "Pain Ratio", "Value": f"{pain_ratio(adv_p, rf):.3f}"},
                     {"Metric": "Kappa 3", "Value": f"{kappa_3_ratio(adv_p):.3f}"},
                     {"Metric": "Stutzer Index", "Value": f"{stutzer_index(adv_p):.3f}"},
                 ])
-                safe_df(adv_df)
-
+                safe_df(adv_metrics)
+            
             with col2:
-                st.markdown("### Cornish-Fisher Risk")
-                cf_df = pd.DataFrame([
+                st.markdown("### Cornish-Fisher Risk Metrics")
+                cf_metrics = pd.DataFrame([
                     {"Metric": "Historical VaR 95%", "Value": f"{historical_var(adv_p, 0.95):.2%}"},
                     {"Metric": "Cornish-Fisher VaR 95%", "Value": f"{cornish_fisher_var(adv_p, 0.95):.2%}"},
                     {"Metric": "Historical CVaR 95%", "Value": f"{historical_cvar(adv_p, 0.95):.2%}"},
                     {"Metric": "Cornish-Fisher CVaR 95%", "Value": f"{cornish_fisher_cvar(adv_p, 0.95):.2%}"},
-                    {"Metric": "Modified Sharpe", "Value": f"{modified_sharpe_cf(adv_p, rf, 0.95):.3f}"},
+                    {"Metric": "Modified Sharpe (CF-VaR)", "Value": f"{modified_sharpe_cf(adv_p, rf, 0.95):.3f}"},
                 ])
-                safe_df(cf_df)
-
+                safe_df(cf_metrics)
+            
+            with col3:
+                st.markdown("### Benchmark-Relative")
+                capture = capture_ratios(adv_p, adv_b)
+                capture_df = pd.DataFrame([
+                    {"Metric": "Up Capture Ratio", "Value": f"{capture.get('Up Capture Ratio', np.nan):.3f}"},
+                    {"Metric": "Down Capture Ratio", "Value": f"{capture.get('Down Capture Ratio', np.nan):.3f}"},
+                    {"Metric": "Capture Ratio (Up/Down)", "Value": f"{capture.get('Capture Ratio (Up/Down)', np.nan):.3f}"},
+                    {"Metric": "Appraisal Ratio", "Value": f"{appraisal_ratio(adv_p, adv_b, rf):.3f}"},
+                ])
+                safe_df(capture_df)
+            
             st.divider()
-            st.subheader("Kalman Filter Beta")
-            beta_dict = rolling_beta_enhanced(adv_r, benchmark_returns, rolling_window)
-            fig_kalman = go.Figure()
-            fig_kalman.add_trace(go.Scatter(x=beta_dict["Rolling Beta"].index, y=beta_dict["Rolling Beta"].values, mode="lines", name=f"Rolling Beta ({rolling_window}d)", line=dict(color=QFA_COLORS["steel"], width=2)))
-            fig_kalman.add_trace(go.Scatter(x=beta_dict["Kalman Beta"].index, y=beta_dict["Kalman Beta"].values, mode="lines", name="Kalman Filter Beta", line=dict(color=QFA_COLORS["muted_gold"], width=2.2)))
-            fig_kalman.add_hline(y=1.0, line_dash="dash")
-            safe_chart(layout(fig_kalman, f"Beta Estimation — {adv_strategy}", 500))
+            
+            st.subheader("Kalman Filter Beta vs Rolling Beta")
+            col_k1, col_k2 = st.columns(2)
+            
+            with col_k1:
+                beta_dict = rolling_beta_enhanced(adv_r, benchmark_returns, rolling_window)
+                fig_beta_compare = go.Figure()
+                fig_beta_compare.add_trace(go.Scatter(
+                    x=beta_dict["Rolling Beta"].index, 
+                    y=beta_dict["Rolling Beta"].values, 
+                    mode="lines", 
+                    name=f"Rolling Beta ({rolling_window}d)",
+                    line=dict(color=QFA_COLORS["steel"], width=2)
+                ))
+                fig_beta_compare.add_trace(go.Scatter(
+                    x=beta_dict["Kalman Beta"].index, 
+                    y=beta_dict["Kalman Beta"].values, 
+                    mode="lines", 
+                    name="Kalman Filter Beta",
+                    line=dict(color=QFA_COLORS["muted_gold"], width=2.2)
+                ))
+                fig_beta_compare.add_hline(y=1.0, line_dash="dash", annotation_text="Beta = 1")
+                fig_beta_compare.update_yaxes(title="Beta")
+                safe_chart(layout(fig_beta_compare, f"Beta Estimation Methods Comparison — {adv_strategy}", 550))
+            
+            with col_k2:
+                common_idx = beta_dict["Rolling Beta"].index.intersection(beta_dict["Kalman Beta"].index)
+                if len(common_idx) > 0:
+                    diff = beta_dict["Kalman Beta"].loc[common_idx] - beta_dict["Rolling Beta"].loc[common_idx]
+                    diff_fig = go.Figure()
+                    diff_fig.add_trace(go.Histogram(x=diff.values, nbinsx=30, marker_color=QFA_COLORS["navy"]))
+                    diff_fig.update_xaxes(title="Kalman Beta - Rolling Beta")
+                    diff_fig.update_yaxes(title="Frequency")
+                    safe_chart(layout(diff_fig, "Beta Estimation Difference Distribution", 550))
+            
+            st.divider()
+            
+            st.subheader("Volatility Regime Analysis")
+            regime_df = regime_conditional_metrics(adv_r, benchmark_returns)
+            safe_df(regime_df)
+            
+            if run_garch and 'garch_store' in locals() and garch_store:
+                st.subheader("GARCH-Conditional VaR (from fitted models)")
+                garch_var_df = []
+                for ticker in returns.columns:
+                    gvar = garch_conditional_var(returns[ticker], garch_store, ticker, "garch_t", 0.95)
+                    garch_var_df.append({
+                        "Instrument": COMMODITY_UNIVERSE.get(ticker, {}).get("display", ticker), 
+                        "GARCH VaR 95%": f"{gvar:.2%}" if not pd.isna(gvar) else "N/A"
+                    })
+                safe_df(pd.DataFrame(garch_var_df))
+            
+            st.caption("""
+            **Interpretation Guide:**
+            - **Gain-Loss Ratio > 1.5** indicates favorable asymmetry.
+            - **Martin Ratio / Pain Ratio** penalize drawdown severity (higher is better).
+            - **Kappa 3** focuses on large loss avoidance (higher is better).
+            - **Stutzer Index** penalizes catastrophic losses.
+            - **Cornish-Fisher VaR** adjusts for skewness/kurtosis - compare with historical VaR.
+            - **Capture Ratio > 1** means portfolio outperforms benchmark in both up/down markets.
+            - **Kalman Beta** is smoother and more adaptive than rolling window beta.
+            """)
 
-            st.subheader("Regime Analysis")
-            safe_df(regime_conditional_metrics(adv_r, benchmark_returns))
-
-    with tabs[14]:
+    # ============================================================
+    # TAB 13: GARCH Volatility Lab
+    # ============================================================
+    with tabs[13]:
         st.subheader("GARCH Volatility Lab")
+        st.markdown("<div class='qfa-note'>GARCH is fitted to individual commodities, not portfolio strategies.</div>", unsafe_allow_html=True)
         if run_garch:
             with st.spinner("Running GARCH models..."):
-                garch_table, best_garch, garch_store = run_garch_suite(returns, tuple(GARCH_MODEL_OPTIONS[garch_mode]))
+                garch_table, best_garch, garch_store_local = run_garch_suite(returns, tuple(GARCH_MODEL_OPTIONS[garch_mode]))
+                garch_store = garch_store_local
             safe_df(best_garch)
             safe_chart(fig_garch_best(best_garch, garch_store))
+            safe_chart(fig_garch_rank(garch_table))
+
             if not best_garch.empty:
-                choice = st.selectbox("Instrument diagnostics", options=list(best_garch["Ticker"]), format_func=lambda t: COMMODITY_UNIVERSE.get(t, {}).get("display", t))
+                choice = st.selectbox(
+                    "Instrument diagnostics",
+                    options=list(best_garch["Ticker"]),
+                    format_func=lambda t: COMMODITY_UNIVERSE.get(t, {}).get("display", t),
+                )
                 best_key = best_garch[best_garch["Ticker"] == choice].iloc[0]["Best Model Key"]
                 safe_chart(fig_garch_resid(choice, best_key, garch_store))
+                with st.expander("ARCH summary"):
+                    key = f"{choice}__{best_key}"
+                    st.text(garch_store.get(key, {}).get("Summary", "Unavailable"))
             safe_df(garch_table)
         else:
-            st.info("Enable 'Run GARCH Lab' in sidebar")
+            st.info("Enable 'Run GARCH Lab' in the sidebar.")
+            garch_store = {}
 
-    with tabs[15]:
-        st.subheader("QFA Tearsheet Reports")
-        qs_strategy = st.selectbox("Select strategy", options=all_strategy_names, index=0)
-        qs_bytes, _ = quantstats_html(qs_strategy, strategy_returns[qs_strategy], rf)
-        selected_row = all_strategy_metrics[all_strategy_metrics["Strategy / Instrument"] == qs_strategy].iloc[0]
-        tearsheet_bytes = qfa_institutional_tearsheet_html(qs_strategy, strategy_returns[qs_strategy], benchmark_returns, rf, selected_row)
+    # ============================================================
+    # TAB 14: QFA Tearsheet Reports
+    # ============================================================
+    with tabs[14]:
+        st.subheader("QFA Tearsheet Reports | Select Your Strategy First!")
+        st.markdown(
+            "<div class='qfa-note'>Select a strategy first. Reports are generated from the validated daily strategy return stream and benchmark-aligned against S&P 500 (^GSPC).</div>",
+            unsafe_allow_html=True,
+        )
+        qs_strategy = st.selectbox("Report strategy", options=all_strategy_names, index=all_strategy_names.index(primary) if primary in all_strategy_names else 0)
+        qs_bytes, qs_status = quantstats_html(qs_strategy, strategy_returns[qs_strategy], rf)
 
-        col_a, col_b = st.columns(2)
-        with col_a:
-            st.download_button("Download QFA Institutional Tearsheet", data=tearsheet_bytes, file_name=f"qfa_tearsheet_v414_{qs_strategy}.html", mime="text/html")
-        with col_b:
+        selected_metric_row = all_strategy_metrics[all_strategy_metrics["Strategy / Instrument"] == qs_strategy].iloc[0]
+        institutional_tearsheet_bytes = qfa_institutional_tearsheet_html(
+            qs_strategy,
+            strategy_returns[qs_strategy],
+            benchmark_returns,
+            rf,
+            selected_metric_row,
+        )
+
+        c_report_1, c_report_2 = st.columns(2)
+        safe_strategy_name = qs_strategy.lower().replace(" ", "_").replace("/", "_")
+
+        with c_report_1:
+            st.download_button(
+                f"Download QFA Institutional Tearsheet — {qs_strategy}",
+                data=institutional_tearsheet_bytes,
+                file_name=f"qfa_institutional_tearsheet_v413_{safe_strategy_name}.html",
+                mime="text/html",
+            )
+
+        with c_report_2:
             if qs_bytes:
-                st.download_button("Download QuantStats HTML", data=qs_bytes, file_name=f"qfa_quantstats_v414_{qs_strategy}.html", mime="text/html")
+                st.download_button(
+                    f"Download QuantStats HTML — {qs_strategy}",
+                    data=qs_bytes,
+                    file_name=f"qfa_quantstats_v413_{safe_strategy_name}.html",
+                    mime="text/html",
+                )
+            else:
+                st.info("QFA Institutional Tearsheet is ready.")
+
+        st.subheader("QuantStats-Style Summary Metrics — v4.13 Verified")
+        qfa_qs_metrics = qfa_quantstats_style_metrics(qs_strategy, strategy_returns[qs_strategy], benchmark_returns, rf)
+        safe_df(qfa_metrics_display_table(qfa_qs_metrics))
+
+        with st.expander("Verify QFA Institutional Tearsheet content before download", expanded=False):
+            st.markdown("The downloaded QFA Institutional Tearsheet contains the full table shown above under **QuantStats-Style Summary Metrics — v4.13 Verified**.")
+
+        st.subheader("Strategy Report Metrics")
+        safe_df(all_strategy_metrics[all_strategy_metrics["Strategy / Instrument"] == qs_strategy])
+
+    # ============================================================
+    # TAB 15-22 (Portfolio Strategy Notes through Export Center)
+    # ============================================================
+    
+    with tabs[15]:
+        st.subheader("Portfolio Strategy Notes")
+        st.markdown(
+            "<div class='qfa-note'>This table explains each portfolio strategy in a board-readable format.</div>",
+            unsafe_allow_html=True,
+        )
+        st.markdown("<div class='compact-notes'>", unsafe_allow_html=True)
+        safe_df(portfolio_strategy_notes_table())
+        st.markdown("</div>", unsafe_allow_html=True)
 
     with tabs[16]:
-        st.subheader("Portfolio Strategy Notes")
-        safe_df(portfolio_strategy_notes_table())
-
-    with tabs[17]:
         st.subheader("Alpha Generation")
+        st.markdown(
+            "<div class='qfa-note'>Alpha generation must be governed as a research pipeline.</div>",
+            unsafe_allow_html=True,
+        )
+        st.subheader("Alpha Methods Library")
+        st.markdown("<div class='compact-notes'>", unsafe_allow_html=True)
         safe_df(alpha_generation_methods_table())
+        st.markdown("</div>", unsafe_allow_html=True)
+        st.subheader("Alpha Research Pipeline")
         safe_df(alpha_research_pipeline_table())
 
-    with tabs[18]:
+    with tabs[17]:
         st.subheader("Alpha Engine LIVE")
+        st.markdown(
+            "<div class='qfa-note'>This tab calculates live alpha signals from the selected universe.</div>",
+            unsafe_allow_html=True,
+        )
         safe_df(alpha_engine["snapshot"])
         safe_chart(fig_alpha_scores(alpha_engine["composite"]))
         safe_chart(fig_alpha_weights(alpha_engine["weights"]))
 
-    with tabs[19]:
+    with tabs[18]:
         st.subheader("Alpha IC Validation")
+        st.markdown(
+            "<div class='qfa-note'>Information Coefficient measures whether today's signal ranks predict future return ranks.</div>",
+            unsafe_allow_html=True,
+        )
         safe_df(alpha_engine["ic_table"])
         safe_chart(fig_ic_series(alpha_engine["signals"], returns, alpha_ic_horizon))
+        
+        st.subheader("IC Decay Analysis")
+        st.markdown("<div class='qfa-note'>How does predictive power decay with forecast horizon?</div>", unsafe_allow_html=True)
         ic_decay_df = information_coefficient_decay(alpha_engine["signals"], returns, max_lag=10)
         if not ic_decay_df.empty:
-            st.subheader("IC Decay Analysis")
+            fig_ic_decay = go.Figure()
+            for signal_name in ic_decay_df["Signal"].unique():
+                subset = ic_decay_df[ic_decay_df["Signal"] == signal_name]
+                fig_ic_decay.add_trace(go.Scatter(
+                    x=subset["Lag (Days)"], 
+                    y=subset["Mean IC"], 
+                    mode="lines+markers", 
+                    name=signal_name,
+                    line=dict(width=2)
+                ))
+            fig_ic_decay.add_hline(y=0, line_dash="dash", annotation_text="IC = 0")
+            fig_ic_decay.update_xaxes(title="Forecast Horizon (Days)")
+            fig_ic_decay.update_yaxes(title="Mean Information Coefficient")
+            safe_chart(layout(fig_ic_decay, "Information Coefficient Decay Curve", 600))
             safe_df(ic_decay_df)
+        else:
+            st.info("Not enough data for IC decay analysis. Try longer date range.")
 
-    with tabs[20]:
+    with tabs[19]:
         st.subheader("Alpha Portfolio")
         ew_ret = strategy_returns.get("Equal Weight")
         safe_chart(fig_alpha_cumulative(alpha_engine["returns"], benchmark_returns, ew_ret))
         safe_chart(fig_alpha_drawdown(alpha_engine["returns"], ew_ret))
         safe_chart(fig_alpha_turnover(alpha_engine["turnover"]))
+        alpha_metrics = metrics_for_returns({"Alpha Composite": alpha_engine["returns"], "Equal Weight": ew_ret}, benchmark_returns, rf)
+        safe_df(alpha_metrics)
+        st.subheader("Alpha Governance Diagnostics")
+        safe_df(alpha_governance_table(alpha_engine["returns"], benchmark_returns, alpha_engine["weights"], alpha_engine["ic_table"], rf))
+
+    with tabs[20]:
+        st.subheader("Info Hub")
+        st.subheader("Proxy Transparency")
+        safe_df(PROXY_TRANSPARENCY_TABLE)
+        st.caption("ETF proxy mode is explicit and visible. It is not synthetic data.")
+        info_df = pd.DataFrame([
+            {"Ticker": k, "Display Name": v["display"], "Full Name": v["name"], "Instrument Class": v["class"], "Source": "Yahoo Finance"}
+            for k, v in COMMODITY_UNIVERSE.items()
+        ])
+        safe_df(info_df)
+        st.subheader("Deployment Diagnostics")
+        safe_df(pd.DataFrame([
+            {"Item": "Version", "Value": VERSION},
+            {"Item": "Python", "Value": sys.version.split()[0]},
+            {"Item": "Streamlit", "Value": getattr(st, "__version__", "unknown")},
+            {"Item": "Synthetic Fallback", "Value": "Disabled"},
+            {"Item": "Benchmark", "Value": f"{BENCHMARK_NAME} ({BENCHMARK_TICKER})"},
+        ]))
 
     with tabs[21]:
-        st.subheader("Info Hub")
-        safe_df(PROXY_TRANSPARENCY_TABLE)
-        info_df = pd.DataFrame([{"Ticker": k, "Display": v["display"], "Class": v["class"]} for k, v in COMMODITY_UNIVERSE.items()])
-        safe_df(info_df)
-
-    with tabs[22]:
         st.subheader("Data Quality")
         safe_df(quality)
+        st.caption(f"Aligned prices: {prices.shape}; aligned returns: {returns.shape}; benchmark returns: {benchmark_returns.shape}")
 
-    with tabs[23]:
+    with tabs[22]:
         st.subheader("Export Center")
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.download_button("Strategy Metrics CSV", df_csv(all_strategy_metrics), "qfa_metrics.csv")
-            st.download_button("Strategy Weights CSV", df_csv(weights_df), "qfa_weights.csv")
+            st.download_button("Download strategy metrics CSV", df_csv(all_strategy_metrics), "qfa_strategy_metrics.csv", "text/csv")
+            st.download_button("Download strategy weights CSV", df_csv(weights_df), "qfa_strategy_weights.csv", "text/csv")
         with col2:
-            st.download_button("Prices CSV", prices.to_csv().encode(), "qfa_prices.csv")
-            st.download_button("Returns CSV", returns.to_csv().encode(), "qfa_returns.csv")
+            st.download_button("Download aligned prices CSV", prices.to_csv().encode("utf-8"), "qfa_aligned_prices.csv", "text/csv")
+            st.download_button("Download aligned returns CSV", returns.to_csv().encode("utf-8"), "qfa_aligned_returns.csv", "text/csv")
         with col3:
-            st.download_button("Alpha IC CSV", df_csv(alpha_engine["ic_table"]), "qfa_alpha_ic.csv")
-            st.download_button("Alpha Snapshot CSV", df_csv(alpha_engine["snapshot"]), "qfa_alpha_snapshot.csv")
+            st.download_button("Download strategy returns CSV", returns_csv(strategy_returns), "qfa_strategy_returns.csv", "text/csv")
+            st.download_button("Download data quality CSV", df_csv(quality), "qfa_data_quality.csv", "text/csv")
+            st.download_button("Download alpha methods CSV", df_csv(alpha_generation_methods_table()), "qfa_alpha_methods.csv", "text/csv")
+            st.download_button("Download alpha IC CSV", df_csv(alpha_engine["ic_table"]), "qfa_alpha_ic.csv", "text/csv")
+            st.download_button("Download alpha snapshot CSV", df_csv(alpha_engine["snapshot"]), "qfa_alpha_snapshot.csv", "text/csv")
+            st.download_button("Download QFA QuantStats-style metrics CSV", df_csv(qfa_quantstats_style_metrics(primary, strategy_returns[primary], benchmark_returns, rf)), "qfa_quantstats_style_metrics.csv", "text/csv")
 
 
 if __name__ == "__main__":
