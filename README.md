@@ -1,16 +1,13 @@
-# QFA Prime Finance Platform — Streamlit v4.16 Executive Report Engine
+# QFA Prime Finance Platform — Streamlit v4.17 UI Institutional Upgrade
 
 ## Updates
 
-- Adds subtitle under main app header:
+- Rebuilt main hero header in institutional style.
+- Signature is now embedded inside the custom hero block:
   `By MK FinTECH LabGEN@2026 Istanbul`
-- Adds the same institutional branding into exported HTML Tearsheet.
-- Adds HTML footer.
-- Adds subtle report watermark.
-- Adds Executive Summary — Board View inside HTML report.
-- Adds Board Decision Flags inside HTML report.
-- Preserves all existing QuantStats-style metrics and report charts.
-- Keeps benchmark as S&P 500 (`^GSPC`).
+- Added institutional eyebrow, module label, and version chip.
+- Strengthened CSS so the signature is visible and not overridden.
+- Preserved all v4.16 report generation, QuantStats-style metrics, Alpha Engine, Advanced Risk Analytics and ^GSPC benchmark logic.
 
 ## Run
 

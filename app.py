@@ -125,7 +125,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-VERSION = "Streamlit Interactive v4.16 Executive Report Engine"
+VERSION = "Streamlit Interactive v4.17 UI Institutional Upgrade"
 TRADING_DAYS = 252
 DEFAULT_RF = 0.045
 MIN_START_DATE = dt.date(2018, 1, 1)
@@ -283,6 +283,71 @@ st.markdown(
             line-height: 1.55;
             margin: 12px 0 18px;
         }
+
+        .qfa-hero {
+            position: relative;
+            overflow: hidden;
+        }
+        .qfa-hero::after {
+            content: "";
+            position: absolute;
+            right: -90px;
+            top: -90px;
+            width: 240px;
+            height: 240px;
+            background: rgba(201, 162, 39, 0.10);
+            border-radius: 50%;
+            pointer-events: none;
+        }
+        .qfa-hero-eyebrow {
+            color: #c9a227;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: .16em;
+            font-weight: 900;
+            margin-bottom: 8px;
+        }
+        .qfa-hero-subtitle {
+            color: #cbd5e1;
+            font-size: 15px;
+            margin: 7px 0 0;
+            font-weight: 600;
+        }
+        .qfa-hero-module {
+            color: #e5e7eb;
+            font-size: 14px;
+            margin-top: 4px;
+            font-weight: 700;
+        }
+        .qfa-signature {
+            color: #9CA3AF !important;
+            font-size: 13px !important;
+            font-weight: 600 !important;
+            margin-top: 8px !important;
+            letter-spacing: .02em !important;
+            display: block !important;
+            opacity: 1 !important;
+            visibility: visible !important;
+        }
+        .qfa-version-chip {
+            display: inline-block;
+            margin-top: 12px;
+            padding: 5px 10px;
+            border-radius: 999px;
+            border: 1px solid rgba(203, 213, 225, .35);
+            color: #cbd5e1;
+            background: rgba(255,255,255,.05);
+            font-size: 11px;
+            font-weight: 800;
+        }
+        .qfa-section-title {
+            font-size: 18px;
+            font-weight: 900;
+            color: #0f172a;
+            margin: 12px 0 6px;
+            letter-spacing: .01em;
+        }
+
         .qfa-note {
             background: #fff7ed;
             border-left: 5px solid #f59e0b;
@@ -366,6 +431,8 @@ st.markdown(
             font-size: 11px !important;
             padding: 6px !important;
         }
+        .compact-notes table { width: 100% !important; table-layout: fixed !important; }
+        .compact-notes th, .compact-notes td { white-space: normal !important; word-wrap: break-word !important; overflow-wrap: break-word !important; }
         .compact-notes td {
             font-size: 11px !important;
             padding: 6px !important;
@@ -3107,9 +3174,12 @@ def main():
     st.markdown(
         f"""
         <div class="qfa-hero">
+            <div class="qfa-hero-eyebrow">Institutional Quantitative Platform</div>
             <h1>QFA Prime Finance Platform</h1>
-            <p>Commodity Instrument Class — Institutional Interactive Strategy Lab</p>
-            <p>Alpha Engine + Advanced Risk Analytics</p>
+            <div class="qfa-hero-subtitle">Commodity Instrument Class — Institutional Interactive Strategy Lab</div>
+            <div class="qfa-hero-module">Alpha Engine + Advanced Risk Analytics</div>
+            <div class="qfa-signature">{BRAND_SIGNATURE}</div>
+            <div class="qfa-version-chip">{VERSION}</div>
         </div>
         """,
         unsafe_allow_html=True,
